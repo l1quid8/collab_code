@@ -21,6 +21,7 @@ import path from "node:path";
 import process from "node:process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 import { parseArgs } from "./lib/args.mjs";
 import { getCodexAvailability, getCodexLoginStatus } from "./lib/process.mjs";
@@ -84,8 +85,84 @@ function output(value, asJson = false) {
 
 function getActiveSession() {
   const id = getActiveSessionId(CWD);
-  if (!id) return null;
+  if (typeof id !== "string" || id.trim() === "") return null;
   return loadSession(id, CWD);
+}
+
+function addUniqueFile(list, filePath) {
+  if (!filePath || filePath === "unknown") return;
+  if (!list.includes(filePath)) {
+    list.push(filePath);
+  }
+}
+
+function ensureSessionFileLists(session) {
+  if (!Array.isArray(session.filesCreated)) {
+    session.filesCreated = [];
+  }
+  if (!Array.isArray(session.filesModified)) {
+    session.filesModified = [];
+  }
+}
+
+function trackFilesFromNotifications(session, fileChanges = []) {
+  ensureSessionFileLists(session);
+  for (const fc of fileChanges ?? []) {
+    const changes = Array.isArray(fc.changes) ? fc.changes : [fc];
+    for (const change of changes) {
+      const filePath = change.path ?? change.filePath ?? "unknown";
+      const action = String(change.action ?? "edit").toLowerCase();
+      if (action === "create" || action === "add") {
+        addUniqueFile(session.filesCreated, filePath);
+      } else {
+        addUniqueFile(session.filesModified, filePath);
+      }
+    }
+  }
+}
+
+function parsePorcelainPath(rawPath) {
+  const renameSeparator = " -> ";
+  if (!rawPath.includes(renameSeparator)) return rawPath;
+  return rawPath.split(renameSeparator).at(-1)?.trim() ?? rawPath;
+}
+
+function applyGitStatusFileTrackingFallback(session) {
+  ensureSessionFileLists(session);
+  const hasTrackedFiles =
+    (session.filesCreated?.length ?? 0) > 0 ||
+    (session.filesModified?.length ?? 0) > 0;
+  if (hasTrackedFiles) return false;
+
+  const result = spawnSync("git", ["status", "--porcelain"], {
+    cwd: CWD,
+    encoding: "utf8",
+  });
+  if (result.error || result.status !== 0) return false;
+
+  const lines = (result.stdout ?? "").split(/\r?\n/);
+  const relevantCodes = new Set(["M", "A", "D", "R"]);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+
+    if (line.startsWith("?? ")) {
+      addUniqueFile(session.filesCreated, line.slice(3).trim());
+      continue;
+    }
+
+    const s0 = line[0];
+    const s1 = line[1];
+    if (!relevantCodes.has(s0) && !relevantCodes.has(s1)) continue;
+    const rawPath = line.slice(3).trim();
+    const filePath = parsePorcelainPath(rawPath);
+    if (s0 === "A" || s1 === "A") {
+      addUniqueFile(session.filesCreated, filePath);
+    } else {
+      addUniqueFile(session.filesModified, filePath);
+    }
+  }
+
+  return true;
 }
 
 function requireActiveSession() {
@@ -435,21 +512,8 @@ async function handleExecute(argv) {
       idleTimeoutMs: config.idleTimeoutMs,
     });
 
-    // Track file changes
-    for (const fc of result.fileChanges ?? []) {
-      // fc may be the change itself or a container with a .changes array
-      const changes = Array.isArray(fc.changes) ? fc.changes : [fc];
-      for (const change of changes) {
-        const filePath = change.path ?? change.filePath ?? "unknown";
-        if (filePath === "unknown") continue;
-        const action = change.action ?? "edit";
-        if (action === "create" || action === "add") {
-          session.filesCreated.push(filePath);
-        } else {
-          session.filesModified.push(filePath);
-        }
-      }
-    }
+    trackFilesFromNotifications(session, result.fileChanges ?? []);
+    const usedGitFallback = applyGitStatusFileTrackingFallback(session);
 
     setPhase(session, "review", CWD);
     addMessage(session, "codex", result.lastMessage || "", CWD);
@@ -457,6 +521,10 @@ async function handleExecute(argv) {
 
     if (!result.lastMessage && server.stderr) {
       output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
+    }
+
+    if (usedGitFallback) {
+      output("[COLLAB] File tracking from events was empty; fell back to git status --porcelain.\n");
     }
 
     output(renderExecutionResult(result));
@@ -506,11 +574,18 @@ async function handleExecuteContinue(argv) {
       idleTimeoutMs: config.idleTimeoutMs,
     });
 
+    trackFilesFromNotifications(session, result.fileChanges ?? []);
+    const usedGitFallback = applyGitStatusFileTrackingFallback(session);
+
     addMessage(session, "codex", result.lastMessage || "", CWD);
     saveSession(session, CWD);
 
     if (!result.lastMessage && server.stderr) {
       output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
+    }
+
+    if (usedGitFallback) {
+      output("[COLLAB] File tracking from events was empty; fell back to git status --porcelain.\n");
     }
 
     output(renderExecutionResult(result));

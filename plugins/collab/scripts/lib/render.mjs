@@ -191,7 +191,6 @@ export function renderConfig(config) {
   lines.push(`  architect model:    ${config.architect ?? "(not set — will ask on first run)"}`);
   lines.push(`  codex sandbox:      ${config.codexSandbox}`);
   lines.push(`  debate sandbox:     ${config.codexDebateSandbox}`);
-  lines.push(`  max debate rounds:  ${config.maxDebateRounds}`);
   lines.push(`  turn timeout:       ${config.turnTimeoutMs / 1000}s`);
   lines.push(`  idle timeout:       ${config.idleTimeoutMs / 1000}s`);
   lines.push("");

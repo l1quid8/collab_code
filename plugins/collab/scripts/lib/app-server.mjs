@@ -163,7 +163,7 @@ export class CodexAppServer {
       error: null,
       completed: false,
       messages: [],
-      _lastNotificationAt: Date.now(),
+      _lastNotificationAt: null,
     };
 
     // Set up notification handler to capture turn progress
@@ -181,6 +181,7 @@ export class CodexAppServer {
         effort: options.effort ?? null,
         outputSchema: null,
       });
+      state._lastNotificationAt = Date.now();
 
       // Wait for turn completion via notifications
       if (!state.completed) {
@@ -334,9 +335,6 @@ export class CodexAppServer {
     // Track last notification time for idle-timeout detection
     state._lastNotificationAt = Date.now();
 
-    // Debug: log every notification method to stderr so we can see what arrives
-    process.stderr.write(`[notify] ${method}\n`);
-
     switch (method) {
       case "turn/started":
         state.turnId = params.turn?.id ?? params.turnId ?? state.turnId;
@@ -360,11 +358,6 @@ export class CodexAppServer {
         break;
 
       case "item/agentMessage/delta": {
-        // Log the first delta's full params so we can see the actual field names
-        if (!state._deltaLogged) {
-          state._deltaLogged = true;
-          process.stderr.write(`[delta-params] ${JSON.stringify(params).slice(0, 300)}\n`);
-        }
         // Try all known field names for the text chunk
         const chunk = params.text ?? params.delta ?? params.output ?? params.content ?? params.value ?? "";
         if (chunk) {
@@ -435,7 +428,7 @@ export class CodexAppServer {
         }
         // Idle timeout: no notifications received for idleTimeoutMs
         if (
-          state._lastNotificationAt &&
+          state._lastNotificationAt !== null &&
           Date.now() - state._lastNotificationAt > idleTimeoutMs
         ) {
           clearInterval(interval);

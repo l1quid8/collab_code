@@ -118,13 +118,10 @@ View all config:
 ## Session management
 
 Sessions are saved to `.collab/sessions/`. You can:
-- **Halt** a session mid-debate and resume later
+- **Halt** a session mid-debate
 - **Reject** after review to discard all changes
 - **Inspect** diffs before committing
-
-## Permission boundaries
-
-If `.claude/boundaries.md` or `.collab/boundaries.md` exists, both Claude and Codex will respect it. Off-limits modules are flagged during debate and enforced during review.
+Halt saves the session state to `.collab/sessions/`. Manual resume is not yet implemented — to continue a halted task, start a new session.
 
 ## License
 

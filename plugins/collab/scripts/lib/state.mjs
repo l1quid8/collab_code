@@ -185,9 +185,19 @@ export function setPhase(session, phase, cwd) {
  * @param {string} [cwd]
  */
 export function completeSession(session, status, cwd) {
+  const completedAt = nowIso();
   session.status = status;
-  session.completedAt = nowIso();
+  session.completedAt = completedAt;
   saveSession(session, cwd);
+
+  if (status === "completed" || status === "rejected") {
+    const stateDir = resolveStateDir(cwd);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, ACTIVE_FILE),
+      JSON.stringify({ id: null, clearedAt: completedAt }) + "\n"
+    );
+  }
 }
 
 /**
