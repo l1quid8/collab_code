@@ -325,6 +325,9 @@ export class CodexAppServer {
     const method = notification.method;
     const params = notification.params ?? {};
 
+    // Debug: log every notification method to stderr so we can see what arrives
+    process.stderr.write(`[notify] ${method}\n`);
+
     switch (method) {
       case "turn/started":
         state.turnId = params.turn?.id ?? params.turnId ?? state.turnId;
@@ -351,6 +354,10 @@ export class CodexAppServer {
         // Accumulate streaming text chunks into the full response
         const chunk = params.text ?? params.delta ?? "";
         if (chunk) {
+          if (!state.lastMessage) {
+            // Log the full params of the first delta so we can see the field structure
+            process.stderr.write(`[delta-fields] ${JSON.stringify(Object.keys(params))}\n`);
+          }
           state.lastMessage = (state.lastMessage ?? "") + chunk;
         }
         break;
