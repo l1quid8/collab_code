@@ -18,7 +18,6 @@ const CLIENT_INFO = {
 const CAPABILITIES = {
   experimentalApi: false,
   optOutNotificationMethods: [
-    "item/agentMessage/delta",
     "item/reasoning/summaryTextDelta",
     "item/reasoning/summaryPartAdded",
     "item/reasoning/textDelta",
@@ -184,7 +183,7 @@ export class CodexAppServer {
 
       // Wait for turn completion via notifications
       if (!state.completed) {
-        await this._waitForTurnCompletion(state, 300000); // 5 min timeout
+        await this._waitForTurnCompletion(state, options.timeoutMs ?? 600000);
       }
 
       state.turnId = state.turnId ?? response?.turnId ?? null;
@@ -285,6 +284,7 @@ export class CodexAppServer {
     try {
       message = JSON.parse(line);
     } catch {
+      process.stderr.write(`[app-server] non-JSON line: ${line.slice(0, 120)}\n`);
       return;
     }
 
@@ -334,6 +334,10 @@ export class CodexAppServer {
       case "turn/completed":
         state.completed = true;
         state.turnId = params.turn?.id ?? params.turnId ?? state.turnId;
+        // If deltas were accumulated but never flushed to messages array, do it now
+        if (state.lastMessage && state.messages.length === 0) {
+          state.messages.push({ phase: "agent", text: state.lastMessage });
+        }
         this._emitProgress("Codex turn completed.", "done");
         break;
 
@@ -343,12 +347,24 @@ export class CodexAppServer {
         this._emitProgress(`Codex error: ${state.error}`, "error");
         break;
 
-      case "item/agentMessage":
-        state.lastMessage = params.text ?? params.message ?? "";
-        if (state.lastMessage) {
-          state.messages.push({ phase: "agent", text: state.lastMessage });
+      case "item/agentMessage/delta": {
+        // Accumulate streaming text chunks into the full response
+        const chunk = params.text ?? params.delta ?? "";
+        if (chunk) {
+          state.lastMessage = (state.lastMessage ?? "") + chunk;
         }
         break;
+      }
+
+      case "item/agentMessage": {
+        // Consolidated message — use it if we don't already have accumulated deltas
+        const msg = params.text ?? params.message ?? "";
+        if (msg) {
+          state.lastMessage = msg;
+          state.messages.push({ phase: "agent", text: msg });
+        }
+        break;
+      }
 
       case "item/reviewResult":
         state.reviewText = params.text ?? params.review ?? "";

@@ -22,13 +22,12 @@ import process from "node:process";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { parseArgs, splitRawArgs } from "./lib/args.mjs";
+import { parseArgs } from "./lib/args.mjs";
 import { getCodexAvailability, getCodexLoginStatus } from "./lib/process.mjs";
-import { loadConfig, setConfigValue, isArchitectConfigured } from "./lib/config.mjs";
+import { loadConfig, setConfigValue } from "./lib/config.mjs";
 import {
   createSession,
   loadSession,
-  loadLatestSession,
   saveSession,
   addMessage,
   setPhase,
@@ -233,7 +232,6 @@ function handleSessionHalt() {
       status: "halted",
       sessionId: session.id,
       message: "Session halted. No files were written.",
-      resumeWith: "/collab:start --resume",
     }) + "\n"
   );
 }
@@ -258,6 +256,8 @@ async function handleDebateStart(argv) {
   setPhase(session, "debate", CWD);
   addMessage(session, "claude", plan, CWD);
 
+  const config = loadConfig(CWD);
+
   // Connect to Codex app server
   const server = await connectAppServer(CWD, {
     onProgress: (p) => {
@@ -268,7 +268,7 @@ async function handleDebateStart(argv) {
   try {
     // Start a read-only debate thread
     const thread = await server.startThread({
-      sandbox: "read-only",
+      sandbox: config.codexDebateSandbox || "read-only",
       threadName: `Collab Debate: ${session.task.slice(0, 50)}`,
       ephemeral: true,
     });
@@ -303,7 +303,9 @@ async function handleDebateStart(argv) {
       "</instructions>",
     ].join("\n");
 
-    const result = await server.sendTurn(threadId, debatePrompt);
+    const result = await server.sendTurn(threadId, debatePrompt, {
+      timeoutMs: config.turnTimeoutMs,
+    });
 
     // Log Codex's response
     addMessage(session, "codex", result.lastMessage || result.reviewText || "", CWD);
@@ -330,6 +332,8 @@ async function handleDebateTurn(argv) {
 
   addMessage(session, "claude", message, CWD);
 
+  const config = loadConfig(CWD);
+
   const server = await connectAppServer(CWD, {
     onProgress: (p) => {
       process.stderr.write(`[progress] ${p.message}\n`);
@@ -338,7 +342,9 @@ async function handleDebateTurn(argv) {
 
   try {
     // Resume the debate thread
-    await server.resumeThread(session.threadId, { sandbox: "read-only" });
+    await server.resumeThread(session.threadId, {
+      sandbox: config.codexDebateSandbox || "read-only",
+    });
 
     // Send Claude's follow-up
     const prompt = [
@@ -349,7 +355,9 @@ async function handleDebateTurn(argv) {
       "If you agree with the changes, say so clearly. If you still disagree, explain why with evidence.",
     ].join("\n");
 
-    const result = await server.sendTurn(session.threadId, prompt);
+    const result = await server.sendTurn(session.threadId, prompt, {
+      timeoutMs: config.turnTimeoutMs,
+    });
 
     addMessage(session, "codex", result.lastMessage || "", CWD);
     output(renderCodexResponse(result));
@@ -410,12 +418,17 @@ async function handleExecute(argv) {
       "</instructions>",
     ].join("\n");
 
-    const result = await server.sendTurn(threadId, executePrompt);
+    const result = await server.sendTurn(threadId, executePrompt, {
+      timeoutMs: config.turnTimeoutMs,
+    });
 
     // Track file changes
-    for (const fc of result.fileChanges) {
-      for (const change of fc.changes ?? []) {
-        const filePath = change.path ?? "unknown";
+    for (const fc of result.fileChanges ?? []) {
+      // fc may be the change itself or a container with a .changes array
+      const changes = Array.isArray(fc.changes) ? fc.changes : [fc];
+      for (const change of changes) {
+        const filePath = change.path ?? change.filePath ?? "unknown";
+        if (filePath === "unknown") continue;
         const action = change.action ?? "edit";
         if (action === "create" || action === "add") {
           session.filesCreated.push(filePath);
@@ -471,7 +484,9 @@ async function handleExecuteContinue(argv) {
       "Report what you changed.",
     ].join("\n");
 
-    const result = await server.sendTurn(session.executeThreadId, fixPrompt);
+    const result = await server.sendTurn(session.executeThreadId, fixPrompt, {
+      timeoutMs: config.turnTimeoutMs,
+    });
 
     addMessage(session, "codex", result.lastMessage || "", CWD);
     saveSession(session, CWD);
@@ -527,6 +542,13 @@ async function main() {
       throw new Error(`Unknown subcommand: ${subcommand}`);
   }
 }
+
+// Kill any lingering child processes on shutdown
+function onShutdown() {
+  process.exit(0);
+}
+process.on("SIGINT", onShutdown);
+process.on("SIGTERM", onShutdown);
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);

@@ -81,7 +81,7 @@ After each exchange, use `AskUserQuestion` with three options:
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-halt
 ```
-Tell the user: "Session halted. No files were written. Resume with `/collab:start --resume`."
+Tell the user: "Session halted. No files were written."
 Stop here. Do not proceed to execution.
 
 **If the user chooses Approve:** Proceed to Phase 3.
@@ -125,19 +125,18 @@ When everything passes review, use `AskUserQuestion` with options:
 - `Reject — discard all changes`
 
 **If Commit:**
+Stage only the files Codex created or modified (read them from the session's `filesCreated` and `filesModified` arrays via `session-status`). Then commit:
 ```bash
-git add -A && git commit -m "<descriptive commit message>"
+git add <files Codex touched> && git commit -m "<descriptive commit message>"
 ```
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-complete completed
 ```
 
-**If Inspect:** Show the user `git diff --cached` or `git diff` and wait for their decision.
+**If Inspect:** Show the user `git diff` and wait for their decision.
 
 **If Reject:**
-```bash
-git checkout -- . && git clean -fd
-```
+Use `git checkout -- <file>` and `git clean -f <file>` scoped to only the files Codex created or modified. Do NOT run `git checkout -- .` or `git clean -fd` as these would destroy unrelated uncommitted work.
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-complete rejected
 ```

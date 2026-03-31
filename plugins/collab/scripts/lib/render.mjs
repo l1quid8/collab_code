@@ -62,20 +62,22 @@ export function renderCodexResponse(turnResult) {
   }
 
   // Surface what Codex read/ran during the turn — visibility for Claude
-  if (turnResult.commandExecutions.length > 0) {
+  const commandExecutions = turnResult.commandExecutions ?? [];
+  if (commandExecutions.length > 0) {
     lines.push("");
     lines.push("[CODEX COMMANDS EXECUTED]");
-    for (const cmd of turnResult.commandExecutions) {
+    for (const cmd of commandExecutions) {
       const command = cmd.command ?? "";
       const exit = cmd.exitCode ?? cmd.exit_code ?? "?";
       lines.push(`  $ ${command} (exit ${exit})`);
     }
   }
 
-  if (turnResult.fileChanges.length > 0) {
+  const fileChanges = turnResult.fileChanges ?? [];
+  if (fileChanges.length > 0) {
     lines.push("");
     lines.push("[CODEX FILE CHANGES]");
-    for (const fc of turnResult.fileChanges) {
+    for (const fc of fileChanges) {
       for (const change of fc.changes ?? []) {
         lines.push(`  ${change.action ?? "edit"}: ${change.path ?? "unknown"}`);
       }
@@ -102,19 +104,21 @@ export function renderExecutionResult(turnResult) {
     return lines.join("\n");
   }
 
-  if (turnResult.fileChanges.length > 0) {
+  const fileChanges = turnResult.fileChanges ?? [];
+  if (fileChanges.length > 0) {
     lines.push("Files changed:");
-    for (const fc of turnResult.fileChanges) {
+    for (const fc of fileChanges) {
       for (const change of fc.changes ?? []) {
         lines.push(`  ${change.action ?? "edit"}: ${change.path ?? "unknown"}`);
       }
     }
   }
 
-  if (turnResult.commandExecutions.length > 0) {
+  const commandExecutions = turnResult.commandExecutions ?? [];
+  if (commandExecutions.length > 0) {
     lines.push("");
     lines.push("Commands run:");
-    for (const cmd of turnResult.commandExecutions) {
+    for (const cmd of commandExecutions) {
       const command = cmd.command ?? "";
       const exit = cmd.exitCode ?? cmd.exit_code ?? "?";
       lines.push(`  $ ${command} (exit ${exit})`);
@@ -188,6 +192,7 @@ export function renderConfig(config) {
   lines.push(`  codex sandbox:      ${config.codexSandbox}`);
   lines.push(`  debate sandbox:     ${config.codexDebateSandbox}`);
   lines.push(`  max debate rounds:  ${config.maxDebateRounds}`);
+  lines.push(`  turn timeout:       ${config.turnTimeoutMs / 1000}s`);
   lines.push("");
   return lines.join("\n");
 }

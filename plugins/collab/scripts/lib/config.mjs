@@ -6,8 +6,8 @@ const CONFIG_FILE = "config.json";
 
 const DEFAULTS = {
   architect: null,
-  autoApproveReads: true,
   maxDebateRounds: 20,
+  turnTimeoutMs: 600000, // 10 minutes
   codexSandbox: "workspace-write",
   codexDebateSandbox: "read-only",
 };
