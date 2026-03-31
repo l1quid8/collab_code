@@ -351,13 +351,14 @@ export class CodexAppServer {
         break;
 
       case "item/agentMessage/delta": {
-        // Accumulate streaming text chunks into the full response
-        const chunk = params.text ?? params.delta ?? "";
+        // Log the first delta's full params so we can see the actual field names
+        if (!state._deltaLogged) {
+          state._deltaLogged = true;
+          process.stderr.write(`[delta-params] ${JSON.stringify(params).slice(0, 300)}\n`);
+        }
+        // Try all known field names for the text chunk
+        const chunk = params.text ?? params.delta ?? params.output ?? params.content ?? params.value ?? "";
         if (chunk) {
-          if (!state.lastMessage) {
-            // Log the full params of the first delta so we can see the field structure
-            process.stderr.write(`[delta-fields] ${JSON.stringify(Object.keys(params))}\n`);
-          }
           state.lastMessage = (state.lastMessage ?? "") + chunk;
         }
         break;
@@ -400,6 +401,15 @@ export class CodexAppServer {
             `Command finished (exit ${exit}): ${cmd.slice(0, 60)}`,
             exit === 0 ? "running" : "error"
           );
+        } else if (item.type === "message" || item.type === "agentMessage" || item.type === "assistant") {
+          // Agent message item completed — treat as turn done if turn/completed never arrives
+          if (!state.completed) {
+            state.completed = true;
+            if (state.lastMessage && state.messages.length === 0) {
+              state.messages.push({ phase: "agent", text: state.lastMessage });
+            }
+            this._emitProgress("Codex turn completed (via item/completed).", "done");
+          }
         }
         break;
       }
