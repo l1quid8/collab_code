@@ -1,8 +1,0 @@
-{
-  "name": "collab",
-  "version": "0.1.0",
-  "description": "Three-way collaboration between Claude (architect), Codex (implementer), and you (arbiter).",
-  "author": {
-    "name": "l1quid8"
-  }
-}
