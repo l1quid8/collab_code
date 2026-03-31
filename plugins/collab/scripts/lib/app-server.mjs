@@ -410,7 +410,7 @@ export class CodexAppServer {
           );
         }
         // Message-type item/completed no longer triggers turn completion.
-        // Rely on turn/completed notification or idle timeout instead.
+        // Rely on turn/completed notification (or the hard timeout) instead.
         break;
       }
     }
@@ -445,14 +445,8 @@ export class CodexAppServer {
           state._lastNotificationAt !== null &&
           now - state._lastNotificationAt > idleTimeoutMs
         ) {
-          clearInterval(interval);
-          clearTimeout(timer);
-          state.completed = true;
-          if (state.lastMessage && state.messages.length === 0) {
-            state.messages.push({ phase: "agent", text: state.lastMessage });
-          }
-          this._emitProgress("Codex turn completed (idle timeout).", "done");
-          resolve(state);
+          this._emitProgress("Codex is still thinking (no new notifications)...", "running");
+          state._lastNotificationAt = now;
         }
       }, 200);
 

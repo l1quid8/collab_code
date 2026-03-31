@@ -19,6 +19,7 @@ const ACTIVE_FILE = "active-session.json";
  *   bugsCaught: string[],
  *   filesCreated: string[],
  *   filesModified: string[],
+ *   gitBaseline: Record<string, string> | null,
  *   startedAt: string,
  *   completedAt: string | null,
  *   status: string
@@ -71,6 +72,7 @@ export function createSession(task, cwd) {
     bugsCaught: [],
     filesCreated: [],
     filesModified: [],
+    gitBaseline: null,
     startedAt: nowIso(),
     completedAt: null,
     status: "active",
@@ -91,7 +93,7 @@ export function saveSession(session, cwd) {
   const filePath = path.join(dir, `${session.id}.json`);
   fs.writeFileSync(filePath, JSON.stringify(session, null, 2) + "\n");
 
-  // Also write latest symlink
+  // Also write latest-session mirror file (not a symlink — plain file copy)
   const latestPath = path.join(resolveStateDir(cwd), "session-latest.json");
   fs.writeFileSync(latestPath, JSON.stringify(session, null, 2) + "\n");
 }

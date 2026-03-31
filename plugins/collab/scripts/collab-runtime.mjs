@@ -12,6 +12,9 @@
  *   execute <plan>                 Start an execute thread (workspace-write), build the plan
  *   execute-continue <message>     Continue the execute thread (for fixes)
  *   session-create <task>          Create a new session
+ *   session-list                   List existing sessions
+ *   session-activate <id>          Reactivate an active session by ID
+ *   session-note                   Add bug/decision/note to the active session
  *   session-status                 Show active session status
  *   session-halt                   Halt active session
  *   session-complete <status>      Mark session as complete
@@ -34,6 +37,8 @@ import {
   setPhase,
   completeSession,
   getActiveSessionId,
+  setActiveSession,
+  listSessions,
 } from "./lib/state.mjs";
 import { connectAppServer } from "./lib/app-server.mjs";
 import {
@@ -75,9 +80,12 @@ function printUsage() {
       '  collab-runtime config --get <key>',
       '  collab-runtime config --show',
       '  collab-runtime session-create "<task>"',
+      "  collab-runtime session-list",
+      "  collab-runtime session-activate <session-id>",
+      '  collab-runtime session-note --type <bug|decision|note> --text "<text>"',
       '  collab-runtime session-status',
       '  collab-runtime session-halt',
-      '  collab-runtime session-complete <completed|rejected>',
+      "  collab-runtime session-complete <completed|rejected|halted>",
       '  collab-runtime debate-start "<plan text>"',
       '  collab-runtime debate-turn "<follow-up message>"',
       '  collab-runtime execute "<converged plan>"',
@@ -145,7 +153,25 @@ function parsePorcelainPath(rawPath) {
   return rawPath.split(renameSeparator).at(-1)?.trim() ?? rawPath;
 }
 
-function applyGitStatusFileTrackingFallback(session) {
+function captureGitBaseline(cwd) {
+  const result = spawnSync("git", ["status", "--porcelain"], {
+    cwd,
+    encoding: "utf8",
+  });
+  if (result.error || result.status !== 0) return {};
+
+  const baseline = {};
+  for (const line of (result.stdout ?? "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const statusCode = line.slice(0, 2);
+    const rawPath = line.slice(3).trim();
+    const filePath = parsePorcelainPath(rawPath);
+    baseline[filePath] = statusCode;
+  }
+  return baseline;
+}
+
+function applyGitStatusFileTrackingFallback(session, baseline = {}) {
   ensureSessionFileLists(session);
   const hasTrackedFiles =
     (session.filesCreated?.length ?? 0) > 0 ||
@@ -160,11 +186,23 @@ function applyGitStatusFileTrackingFallback(session) {
 
   const lines = (result.stdout ?? "").split(/\r?\n/);
   const relevantCodes = new Set(["M", "A", "D", "R"]);
+  const preExisting = baseline ?? {};
+  const loggedAmbiguous = new Set();
   for (const line of lines) {
     if (!line.trim()) continue;
 
     if (line.startsWith("?? ")) {
-      addUniqueFile(session.filesCreated, line.slice(3).trim());
+      const filePath = parsePorcelainPath(line.slice(3).trim());
+      if (Object.prototype.hasOwnProperty.call(preExisting, filePath)) {
+        if (!loggedAmbiguous.has(filePath)) {
+          output(
+            `[COLLAB] Ambiguous file (pre-existing edit): ${filePath} — skipped in auto-tracking\n`
+          );
+          loggedAmbiguous.add(filePath);
+        }
+        continue;
+      }
+      addUniqueFile(session.filesCreated, filePath);
       continue;
     }
 
@@ -173,6 +211,13 @@ function applyGitStatusFileTrackingFallback(session) {
     if (!relevantCodes.has(s0) && !relevantCodes.has(s1)) continue;
     const rawPath = line.slice(3).trim();
     const filePath = parsePorcelainPath(rawPath);
+    if (Object.prototype.hasOwnProperty.call(preExisting, filePath)) {
+      if (!loggedAmbiguous.has(filePath)) {
+        output(`[COLLAB] Ambiguous file (pre-existing edit): ${filePath} — skipped in auto-tracking\n`);
+        loggedAmbiguous.add(filePath);
+      }
+      continue;
+    }
     if (s0 === "A" || s1 === "A") {
       addUniqueFile(session.filesCreated, filePath);
     } else {
@@ -224,12 +269,9 @@ function handleSetup(argv) {
   if (codex.available && !auth.loggedIn) {
     nextSteps.push("Authenticate Codex: !codex login");
   }
-  if (!config.architect) {
-    nextSteps.push("Set architect model: /collab:config --set architect opus (or sonnet)");
-  }
 
   const report = {
-    ready: codex.available && auth.loggedIn && !!config.architect,
+    ready: codex.available && auth.loggedIn,
     node: { available: true },
     npm: { available: true },
     codex,
@@ -287,6 +329,13 @@ function handleSessionCreate(argv) {
     throw new Error("Task description required.");
   }
 
+  const activeSession = getActiveSession();
+  if (activeSession && activeSession.status === "active") {
+    output(
+      `[COLLAB] Warning: overwriting active session pointer (previous: ${activeSession.id})\n`
+    );
+  }
+
   const session = createSession(task, CWD);
   output(
     JSON.stringify({
@@ -296,6 +345,21 @@ function handleSessionCreate(argv) {
       phase: session.phase,
     }) + "\n"
   );
+}
+
+function handleSessionList() {
+  const sessions = listSessions(CWD);
+  if (sessions.length === 0) {
+    output("No sessions found.\n");
+    return;
+  }
+  for (const s of sessions) {
+    const date = (s.startedAt ?? "").slice(0, 16).replace("T", " ");
+    const status = (s.status ?? "unknown").padEnd(10);
+    const phase = (s.phase ?? "unknown").padEnd(8);
+    const task = (s.task ?? "").slice(0, 55);
+    output(`  ${status} ${phase} ${date}  ${s.id}  ${task}\n`);
+  }
 }
 
 function handleSessionStatus(argv) {
@@ -318,24 +382,109 @@ function handleSessionStatus(argv) {
   );
 }
 
+function handleSessionNote(argv) {
+  const { options, positionals } = parseArgs(argv, {
+    valueOptions: ["type", "text"],
+  });
+
+  const type = String(options.type ?? "").trim().toLowerCase();
+  const text = String(options.text ?? positionals.join(" ")).trim();
+  const validTypes = new Set(["bug", "decision", "note"]);
+
+  if (!validTypes.has(type)) {
+    throw new Error("Invalid note type. Must be one of: bug, decision, note");
+  }
+  if (!text) {
+    throw new Error("Note text required. Use --text \"...\" or provide positional text.");
+  }
+
+  const session = requireActiveSession();
+  if (type === "bug") {
+    session.bugsCaught.push(text);
+  } else if (type === "decision") {
+    session.decisions.push({
+      description: text,
+      proposedBy: "claude",
+      decidedBy: null,
+    });
+  } else {
+    output(`[COLLAB] Note: ${text}\n`);
+  }
+
+  saveSession(session, CWD);
+  output(
+    JSON.stringify({
+      status: "noted",
+      sessionId: session.id,
+      type,
+      text,
+    }) + "\n"
+  );
+}
+
 function handleSessionHalt() {
   const session = requireActiveSession();
+  const filesNote =
+    session.phase === "execute" || session.phase === "review"
+      ? "Warning: Codex may have already written files. Review with git status before discarding."
+      : "No files were written.";
   completeSession(session, "halted", CWD);
 
   output(
     JSON.stringify({
       status: "halted",
       sessionId: session.id,
-      message: "Session halted. No files were written.",
+      message: filesNote,
     }) + "\n"
   );
 }
 
 function handleSessionComplete(argv) {
   const status = argv[0] ?? "completed";
+  const VALID_STATUSES = new Set(["completed", "rejected", "halted"]);
+  if (!VALID_STATUSES.has(status)) {
+    throw new Error(
+      "Invalid session status: '" +
+        status +
+        "'. Must be one of: completed, rejected, halted"
+    );
+  }
+
   const session = requireActiveSession();
   completeSession(session, status, CWD);
   output(renderSessionSummary(session));
+}
+
+function handleSessionActivate(argv) {
+  const sessionId = (argv[0] ?? "").trim();
+  if (!sessionId) throw new Error("Session ID required. Usage: session-activate <session-id>");
+
+  const session = loadSession(sessionId, CWD);
+  if (!session) throw new Error("Session not found: " + sessionId);
+
+  if (session.status !== "active") {
+    throw new Error(
+      'Cannot activate session ' +
+        sessionId +
+        ': status is "' +
+        session.status +
+        '". Only sessions with status "active" can be reactivated.'
+    );
+  }
+
+  setActiveSession(sessionId, CWD);
+  output(
+    JSON.stringify({
+      status: "activated",
+      sessionId: session.id,
+      task: session.task,
+      phase: session.phase,
+      message:
+        "Session reactivated at phase: " +
+        session.phase +
+        ". Use debate-turn (if in debate) or execute-continue (if in execute/review).",
+    }) + "\n"
+  );
 }
 
 async function handleDebateStart(argv) {
@@ -500,6 +649,8 @@ async function handleExecute(argv) {
   session.convergedPlan = plan;
   setPhase(session, "execute", CWD);
   saveSession(session, CWD);
+  session.gitBaseline = captureGitBaseline(CWD);
+  saveSession(session, CWD);
 
   const config = loadConfig(CWD);
 
@@ -547,7 +698,8 @@ async function handleExecute(argv) {
     });
 
     trackFilesFromNotifications(session, result.fileChanges ?? []);
-    const usedGitFallback = applyGitStatusFileTrackingFallback(session);
+    const baseline = session.gitBaseline ?? {};
+    const usedGitFallback = applyGitStatusFileTrackingFallback(session, baseline);
 
     setPhase(session, "review", CWD);
     addMessage(session, "codex", result.lastMessage || "", CWD);
@@ -616,7 +768,8 @@ async function handleExecuteContinue(argv) {
     });
 
     trackFilesFromNotifications(session, result.fileChanges ?? []);
-    const usedGitFallback = applyGitStatusFileTrackingFallback(session);
+    const baseline = session.gitBaseline ?? {};
+    const usedGitFallback = applyGitStatusFileTrackingFallback(session, baseline);
 
     addMessage(session, "codex", result.lastMessage || "", CWD);
     saveSession(session, CWD);
@@ -659,6 +812,15 @@ async function main() {
       break;
     case "session-create":
       handleSessionCreate(argv);
+      break;
+    case "session-list":
+      handleSessionList();
+      break;
+    case "session-activate":
+      handleSessionActivate(argv);
+      break;
+    case "session-note":
+      handleSessionNote(argv);
       break;
     case "session-status":
       handleSessionStatus(argv);

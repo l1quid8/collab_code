@@ -81,7 +81,7 @@ After each exchange, use `AskUserQuestion` with three options:
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-halt
 ```
-Tell the user: "Session halted. No files were written. Session resume is not implemented yet; start a new session to continue this task."
+Tell the user: "Session halted. No files were written. To resume this session later, use: node ...collab-runtime.mjs session-activate <session-id> — then continue with debate-turn (debate phase) or execute-continue (execute/review phase). Find session IDs with: node ...collab-runtime.mjs session-list"
 Stop here. Do not proceed to execution.
 
 **If the user chooses Approve:** Proceed to Phase 3.
@@ -148,4 +148,4 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-complete rejecte
 - **Surface all Codex output to the user.** The user should see what Codex discovered, what commands it ran, what files it read. Transparency, not black-box delegation.
 - **Concede when Codex makes a better argument.** You are collaborating, not competing.
 - **The debate loop has no fixed limit.** Keep going until genuine convergence. Don't rush to approval.
-- **Halt means halt.** If the user halts, nothing touches disk. Zero side effects. Session resume is not implemented; starting over requires a new session.
+- **Halt means halt.** If the user halts during planning/debate, nothing touches disk. During execute/review, files may already exist; verify with `git status` before discard. Sessions can be resumed via `session-activate`.

@@ -21,7 +21,11 @@ export function renderSetupReport(report) {
   lines.push(check(report.codex.available, "codex", report.codex.version ?? report.codex.detail));
   lines.push(check(report.auth.loggedIn, "codex auth", report.auth.detail));
   lines.push(
-    check(report.architectConfigured, "architect model", report.architect ?? "not set")
+    check(
+      true,
+      "architect model (optional)",
+      report.architect ?? "not set — set with /collab:config --set architect=opus"
+    )
   );
   lines.push("");
 
@@ -190,7 +194,9 @@ export function renderConfig(config) {
   lines.push("collab — configuration");
   lines.push("─".repeat(50));
   lines.push("");
-  lines.push(`  architect model:    ${config.architect ?? "(not set — will ask on first run)"}`);
+  lines.push(
+    `  architect model (Claude preference): ${config.architect ?? "(not set — will ask on first run)"}`
+  );
   lines.push(`  codex sandbox:      ${config.codexSandbox}`);
   lines.push(`  debate sandbox:     ${config.codexDebateSandbox}`);
   lines.push(`  turn timeout:       ${config.turnTimeoutMs / 1000}s`);
