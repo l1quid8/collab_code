@@ -163,6 +163,7 @@ export class CodexAppServer {
       error: null,
       completed: false,
       messages: [],
+      _lastNotificationAt: Date.now(),
     };
 
     // Set up notification handler to capture turn progress
@@ -183,7 +184,11 @@ export class CodexAppServer {
 
       // Wait for turn completion via notifications
       if (!state.completed) {
-        await this._waitForTurnCompletion(state, options.timeoutMs ?? 600000);
+        await this._waitForTurnCompletion(
+          state,
+          options.timeoutMs ?? 600000,
+          options.idleTimeoutMs ?? 30000
+        );
       }
 
       state.turnId = state.turnId ?? response?.turnId ?? null;
@@ -213,6 +218,7 @@ export class CodexAppServer {
       error: null,
       completed: false,
       messages: [],
+      _lastNotificationAt: Date.now(),
     };
 
     const prevHandler = this.onNotification;
@@ -229,7 +235,7 @@ export class CodexAppServer {
       });
 
       if (!state.completed) {
-        await this._waitForTurnCompletion(state, 600000); // 10 min for reviews
+        await this._waitForTurnCompletion(state, 600000, 30000); // 10 min hard, 30s idle
       }
     } catch (error) {
       state.error = error;
@@ -325,6 +331,9 @@ export class CodexAppServer {
     const method = notification.method;
     const params = notification.params ?? {};
 
+    // Track last notification time for idle-timeout detection
+    state._lastNotificationAt = Date.now();
+
     // Debug: log every notification method to stderr so we can see what arrives
     process.stderr.write(`[notify] ${method}\n`);
 
@@ -401,16 +410,9 @@ export class CodexAppServer {
             `Command finished (exit ${exit}): ${cmd.slice(0, 60)}`,
             exit === 0 ? "running" : "error"
           );
-        } else if (item.type === "message" || item.type === "agentMessage" || item.type === "assistant") {
-          // Agent message item completed — treat as turn done if turn/completed never arrives
-          if (!state.completed) {
-            state.completed = true;
-            if (state.lastMessage && state.messages.length === 0) {
-              state.messages.push({ phase: "agent", text: state.lastMessage });
-            }
-            this._emitProgress("Codex turn completed (via item/completed).", "done");
-          }
         }
+        // Message-type item/completed no longer triggers turn completion.
+        // Rely on turn/completed notification or idle timeout instead.
         break;
       }
     }
@@ -422,12 +424,27 @@ export class CodexAppServer {
     }
   }
 
-  _waitForTurnCompletion(state, timeoutMs) {
-    return new Promise((resolve, reject) => {
+  _waitForTurnCompletion(state, timeoutMs, idleTimeoutMs = 30000) {
+    return new Promise((resolve) => {
       const interval = setInterval(() => {
         if (state.completed || state.error) {
           clearInterval(interval);
           clearTimeout(timer);
+          resolve(state);
+          return;
+        }
+        // Idle timeout: no notifications received for idleTimeoutMs
+        if (
+          state._lastNotificationAt &&
+          Date.now() - state._lastNotificationAt > idleTimeoutMs
+        ) {
+          clearInterval(interval);
+          clearTimeout(timer);
+          state.completed = true;
+          if (state.lastMessage && state.messages.length === 0) {
+            state.messages.push({ phase: "agent", text: state.lastMessage });
+          }
+          this._emitProgress("Codex turn completed (idle timeout).", "done");
           resolve(state);
         }
       }, 200);

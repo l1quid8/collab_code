@@ -270,7 +270,7 @@ async function handleDebateStart(argv) {
     const thread = await server.startThread({
       sandbox: config.codexDebateSandbox || "read-only",
       threadName: `Collab Debate: ${session.task.slice(0, 50)}`,
-      ephemeral: true,
+      ephemeral: false,
     });
 
     const threadId = thread.thread?.id ?? thread.threadId;
@@ -305,6 +305,7 @@ async function handleDebateStart(argv) {
 
     const result = await server.sendTurn(threadId, debatePrompt, {
       timeoutMs: config.turnTimeoutMs,
+      idleTimeoutMs: config.idleTimeoutMs,
     });
 
     // Log Codex's response
@@ -357,6 +358,7 @@ async function handleDebateTurn(argv) {
 
     const result = await server.sendTurn(session.threadId, prompt, {
       timeoutMs: config.turnTimeoutMs,
+      idleTimeoutMs: config.idleTimeoutMs,
     });
 
     addMessage(session, "codex", result.lastMessage || "", CWD);
@@ -420,6 +422,7 @@ async function handleExecute(argv) {
 
     const result = await server.sendTurn(threadId, executePrompt, {
       timeoutMs: config.turnTimeoutMs,
+      idleTimeoutMs: config.idleTimeoutMs,
     });
 
     // Track file changes
@@ -486,6 +489,7 @@ async function handleExecuteContinue(argv) {
 
     const result = await server.sendTurn(session.executeThreadId, fixPrompt, {
       timeoutMs: config.turnTimeoutMs,
+      idleTimeoutMs: config.idleTimeoutMs,
     });
 
     addMessage(session, "codex", result.lastMessage || "", CWD);
