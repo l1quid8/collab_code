@@ -42,15 +42,16 @@ export function renderSetupReport(report) {
  * Render a codex response for Claude to read.
  * Prefixes with CODEX so Claude can distinguish agent output.
  */
-export function renderCodexResponse(turnResult) {
+export function renderCodexResponse(turnResult, opts = {}) {
   const lines = [];
+  const streamed = !!opts.streamed;
 
   if (turnResult.error) {
     lines.push(`[CODEX ERROR] ${turnResult.error}`);
     return lines.join("\n");
   }
 
-  if (turnResult.lastMessage) {
+  if (turnResult.lastMessage && !streamed) {
     lines.push("[CODEX RESPONSE]");
     lines.push(turnResult.lastMessage);
   }
@@ -94,8 +95,9 @@ export function renderCodexResponse(turnResult) {
 /**
  * Render execution result summary.
  */
-export function renderExecutionResult(turnResult) {
+export function renderExecutionResult(turnResult, opts = {}) {
   const lines = [];
+  const streamed = !!opts.streamed;
   lines.push("[CODEX EXECUTION COMPLETE]");
   lines.push("");
 
@@ -125,7 +127,7 @@ export function renderExecutionResult(turnResult) {
     }
   }
 
-  if (turnResult.lastMessage) {
+  if (turnResult.lastMessage && !streamed) {
     lines.push("");
     lines.push("Codex summary:");
     lines.push(turnResult.lastMessage);

@@ -48,6 +48,24 @@ const CWD = process.cwd();
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+function createAgentStreamer() {
+  let streamed = false;
+  return {
+    onAgentDelta: (chunk) => {
+      if (!chunk) return;
+      if (!streamed) {
+        process.stdout.write("[CODEX RESPONSE]\n");
+        streamed = true;
+      }
+      process.stdout.write(chunk);
+    },
+    wasStreamed: () => streamed,
+    finish: () => {
+      if (streamed) process.stdout.write("\n");
+    },
+  };
+}
+
 function printUsage() {
   console.log(
     [
@@ -324,6 +342,7 @@ async function handleDebateStart(argv) {
   ensureCodexReady();
   const session = requireActiveSession();
   const plan = argv.join(" ").trim();
+  const streamer = createAgentStreamer();
 
   if (!plan) {
     throw new Error("Plan text required for debate-start.");
@@ -340,6 +359,7 @@ async function handleDebateStart(argv) {
     onProgress: (p) => {
       process.stderr.write(`[progress] ${p.message}\n`);
     },
+    onAgentDelta: streamer.onAgentDelta,
   });
 
   try {
@@ -389,12 +409,17 @@ async function handleDebateStart(argv) {
     addMessage(session, "codex", result.lastMessage || result.reviewText || "", CWD);
 
     // Surface server stderr when Codex returned nothing — aids debugging
+    const streamed = streamer.wasStreamed();
+    streamer.finish();
     if (!result.lastMessage && !result.reviewText && server.stderr) {
       output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
     }
 
     // Output for Claude to read
-    output(renderCodexResponse(result));
+    output(renderCodexResponse(result, { streamed }));
+  } catch (error) {
+    streamer.finish();
+    throw error;
   } finally {
     await server.close();
   }
@@ -404,6 +429,7 @@ async function handleDebateTurn(argv) {
   ensureCodexReady();
   const session = requireActiveSession();
   const message = argv.join(" ").trim();
+  const streamer = createAgentStreamer();
 
   if (!message) {
     throw new Error("Message required for debate-turn.");
@@ -421,6 +447,7 @@ async function handleDebateTurn(argv) {
     onProgress: (p) => {
       process.stderr.write(`[progress] ${p.message}\n`);
     },
+    onAgentDelta: streamer.onAgentDelta,
   });
 
   try {
@@ -443,13 +470,18 @@ async function handleDebateTurn(argv) {
       idleTimeoutMs: config.idleTimeoutMs,
     });
 
+    const streamed = streamer.wasStreamed();
+    streamer.finish();
     addMessage(session, "codex", result.lastMessage || "", CWD);
 
     if (!result.lastMessage && server.stderr) {
       output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
     }
 
-    output(renderCodexResponse(result));
+    output(renderCodexResponse(result, { streamed }));
+  } catch (error) {
+    streamer.finish();
+    throw error;
   } finally {
     await server.close();
   }
@@ -459,6 +491,7 @@ async function handleExecute(argv) {
   ensureCodexReady();
   const session = requireActiveSession();
   const plan = argv.join(" ").trim();
+  const streamer = createAgentStreamer();
 
   if (!plan) {
     throw new Error("Converged plan required for execute.");
@@ -474,6 +507,7 @@ async function handleExecute(argv) {
     onProgress: (p) => {
       process.stderr.write(`[progress] ${p.message}\n`);
     },
+    onAgentDelta: streamer.onAgentDelta,
   });
 
   try {
@@ -519,6 +553,8 @@ async function handleExecute(argv) {
     addMessage(session, "codex", result.lastMessage || "", CWD);
     saveSession(session, CWD);
 
+    const streamed = streamer.wasStreamed();
+    streamer.finish();
     if (!result.lastMessage && server.stderr) {
       output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
     }
@@ -527,7 +563,10 @@ async function handleExecute(argv) {
       output("[COLLAB] File tracking from events was empty; fell back to git status --porcelain.\n");
     }
 
-    output(renderExecutionResult(result));
+    output(renderExecutionResult(result, { streamed }));
+  } catch (error) {
+    streamer.finish();
+    throw error;
   } finally {
     await server.close();
   }
@@ -537,6 +576,7 @@ async function handleExecuteContinue(argv) {
   ensureCodexReady();
   const session = requireActiveSession();
   const message = argv.join(" ").trim();
+  const streamer = createAgentStreamer();
 
   if (!message) {
     throw new Error("Fix request required for execute-continue.");
@@ -554,6 +594,7 @@ async function handleExecuteContinue(argv) {
     onProgress: (p) => {
       process.stderr.write(`[progress] ${p.message}\n`);
     },
+    onAgentDelta: streamer.onAgentDelta,
   });
 
   try {
@@ -580,6 +621,8 @@ async function handleExecuteContinue(argv) {
     addMessage(session, "codex", result.lastMessage || "", CWD);
     saveSession(session, CWD);
 
+    const streamed = streamer.wasStreamed();
+    streamer.finish();
     if (!result.lastMessage && server.stderr) {
       output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
     }
@@ -588,7 +631,10 @@ async function handleExecuteContinue(argv) {
       output("[COLLAB] File tracking from events was empty; fell back to git status --porcelain.\n");
     }
 
-    output(renderExecutionResult(result));
+    output(renderExecutionResult(result, { streamed }));
+  } catch (error) {
+    streamer.finish();
+    throw error;
   } finally {
     await server.close();
   }

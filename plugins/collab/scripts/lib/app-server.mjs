@@ -50,6 +50,7 @@ export class CodexAppServer {
     this.closed = false;
     this.onNotification = options.onNotification ?? null;
     this.onProgress = options.onProgress ?? null;
+    this.onAgentDelta = options.onAgentDelta ?? null;
   }
 
   /**
@@ -164,6 +165,8 @@ export class CodexAppServer {
       completed: false,
       messages: [],
       _lastNotificationAt: null,
+      _lastDeltaAt: null,
+      _lastHeartbeatAt: null,
     };
 
     // Set up notification handler to capture turn progress
@@ -362,7 +365,9 @@ export class CodexAppServer {
         const chunk = params.text ?? params.delta ?? params.output ?? params.content ?? params.value ?? "";
         if (chunk) {
           state.lastMessage = (state.lastMessage ?? "") + chunk;
+          this.onAgentDelta?.(chunk);
         }
+        state._lastDeltaAt = Date.now();
         break;
       }
 
@@ -420,16 +425,25 @@ export class CodexAppServer {
   _waitForTurnCompletion(state, timeoutMs, idleTimeoutMs = 30000) {
     return new Promise((resolve) => {
       const interval = setInterval(() => {
+        const now = Date.now();
         if (state.completed || state.error) {
           clearInterval(interval);
           clearTimeout(timer);
           resolve(state);
           return;
         }
+
+        const sinceLastDelta = state._lastDeltaAt ? now - state._lastDeltaAt : Infinity;
+        const sinceLastHeartbeat = state._lastHeartbeatAt ? now - state._lastHeartbeatAt : Infinity;
+        if (!state.completed && !state.error && sinceLastDelta > 5000 && sinceLastHeartbeat > 5000) {
+          this._emitProgress("Codex is still working...", "running");
+          state._lastHeartbeatAt = now;
+        }
+
         // Idle timeout: no notifications received for idleTimeoutMs
         if (
           state._lastNotificationAt !== null &&
-          Date.now() - state._lastNotificationAt > idleTimeoutMs
+          now - state._lastNotificationAt > idleTimeoutMs
         ) {
           clearInterval(interval);
           clearTimeout(timer);
