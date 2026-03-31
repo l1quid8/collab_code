@@ -22,13 +22,13 @@ Claude plans. Codex challenges. They debate until they agree. Then Codex builds 
 Add the marketplace in Claude Code:
 
 ```
-/plugin marketplace add YOUR_USERNAME/collab-plugin-cc
+/plugin marketplace add l1quid8/collab_code
 ```
 
 Install the plugin:
 
 ```
-/plugin install collab@YOUR_USERNAME-collab
+/plugin install collab@collab-code
 ```
 
 Reload plugins:
