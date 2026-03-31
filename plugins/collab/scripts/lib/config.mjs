@@ -1,0 +1,83 @@
+import fs from "node:fs";
+import path from "node:path";
+
+const CONFIG_DIR = ".collab";
+const CONFIG_FILE = "config.json";
+
+const DEFAULTS = {
+  architect: null,
+  autoApproveReads: true,
+  maxDebateRounds: 20,
+  codexSandbox: "workspace-write",
+  codexDebateSandbox: "read-only",
+};
+
+/**
+ * Resolve the config directory path.
+ * @param {string} [cwd]
+ * @returns {string}
+ */
+function resolveConfigDir(cwd) {
+  return path.join(cwd ?? process.cwd(), CONFIG_DIR);
+}
+
+/**
+ * Ensure the config directory exists.
+ * @param {string} [cwd]
+ */
+function ensureConfigDir(cwd) {
+  const dir = resolveConfigDir(cwd);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/**
+ * Load the full config, merged with defaults.
+ * @param {string} [cwd]
+ * @returns {object}
+ */
+export function loadConfig(cwd) {
+  const configPath = path.join(resolveConfigDir(cwd), CONFIG_FILE);
+  let stored = {};
+
+  try {
+    stored = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } catch {
+    // No config yet — use defaults.
+  }
+
+  return { ...DEFAULTS, ...stored };
+}
+
+/**
+ * Save a config value.
+ * @param {string} key
+ * @param {*} value
+ * @param {string} [cwd]
+ */
+export function setConfigValue(key, value, cwd) {
+  const dir = ensureConfigDir(cwd);
+  const configPath = path.join(dir, CONFIG_FILE);
+  const config = loadConfig(cwd);
+  config[key] = value;
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  return config;
+}
+
+/**
+ * Get a single config value.
+ * @param {string} key
+ * @param {string} [cwd]
+ */
+export function getConfigValue(key, cwd) {
+  return loadConfig(cwd)[key] ?? DEFAULTS[key] ?? null;
+}
+
+/**
+ * Check if the architect model has been configured.
+ * @param {string} [cwd]
+ * @returns {boolean}
+ */
+export function isArchitectConfigured(cwd) {
+  return loadConfig(cwd).architect != null;
+}
