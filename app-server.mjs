@@ -1,0 +1,429 @@
+/**
+ * JSON-RPC client for Codex App Server.
+ *
+ * Spawns `codex app-server` as a child process and communicates via
+ * newline-delimited JSON over stdio. Handles the initialize handshake,
+ * thread lifecycle, turn capture, and notification streaming.
+ */
+
+import { spawn } from "node:child_process";
+import readline from "node:readline";
+
+const CLIENT_INFO = {
+  title: "Collab Plugin",
+  name: "Claude Code Collab",
+  version: "0.1.0",
+};
+
+const CAPABILITIES = {
+  experimentalApi: false,
+  optOutNotificationMethods: [
+    "item/agentMessage/delta",
+    "item/reasoning/summaryTextDelta",
+    "item/reasoning/summaryPartAdded",
+    "item/reasoning/textDelta",
+  ],
+};
+
+/**
+ * @typedef {{
+ *   threadId: string,
+ *   turnId: string | null,
+ *   lastMessage: string,
+ *   reviewText: string,
+ *   fileChanges: Array<object>,
+ *   commandExecutions: Array<object>,
+ *   error: unknown,
+ *   completed: boolean,
+ *   messages: Array<{ phase: string | null, text: string }>
+ * }} TurnResult
+ */
+
+export class CodexAppServer {
+  constructor(cwd, options = {}) {
+    this.cwd = cwd;
+    this.options = options;
+    this.proc = null;
+    this.rl = null;
+    this.pending = new Map();
+    this.nextId = 1;
+    this.stderr = "";
+    this.closed = false;
+    this.onNotification = options.onNotification ?? null;
+    this.onProgress = options.onProgress ?? null;
+  }
+
+  /**
+   * Connect to the Codex app server.
+   * Spawns the process and performs the initialize handshake.
+   */
+  async connect() {
+    this.proc = spawn("codex", ["app-server"], {
+      cwd: this.cwd,
+      env: this.options.env ?? process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    this.proc.stderr.setEncoding("utf8");
+    this.proc.stderr.on("data", (chunk) => {
+      this.stderr += chunk;
+    });
+
+    this.proc.on("error", (err) => {
+      this._rejectAll(err);
+    });
+
+    this.proc.on("exit", (code, signal) => {
+      const err =
+        code === 0
+          ? null
+          : new Error(
+              `codex app-server exited (${signal ? `signal ${signal}` : `code ${code}`})`
+            );
+      this._rejectAll(err);
+    });
+
+    this.rl = readline.createInterface({ input: this.proc.stdout });
+    this.rl.on("line", (line) => this._handleLine(line));
+
+    // Initialize handshake
+    await this.request("initialize", {
+      clientInfo: CLIENT_INFO,
+      capabilities: CAPABILITIES,
+    });
+    this._send({ method: "initialized", params: {} });
+  }
+
+  /**
+   * Send a JSON-RPC request and wait for the response.
+   * @template T
+   * @param {string} method
+   * @param {object} params
+   * @returns {Promise<T>}
+   */
+  request(method, params) {
+    if (this.closed) throw new Error("App server connection is closed.");
+
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject, method });
+      this._send({ id, method, params });
+    });
+  }
+
+  /**
+   * Start a new Codex thread.
+   * @param {{ model?: string, sandbox?: string, threadName?: string, ephemeral?: boolean }} options
+   */
+  async startThread(options = {}) {
+    const response = await this.request("thread/start", {
+      cwd: this.cwd,
+      model: options.model ?? null,
+      approvalPolicy: "never",
+      sandbox: options.sandbox ?? "read-only",
+      serviceName: "claude_code_collab_plugin",
+      ephemeral: options.ephemeral ?? true,
+      experimentalRawEvents: false,
+    });
+    return response;
+  }
+
+  /**
+   * Resume an existing thread.
+   * @param {string} threadId
+   * @param {{ model?: string, sandbox?: string }} options
+   */
+  async resumeThread(threadId, options = {}) {
+    const response = await this.request("thread/resume", {
+      threadId,
+      cwd: this.cwd,
+      model: options.model ?? null,
+      approvalPolicy: "never",
+      sandbox: options.sandbox ?? "read-only",
+    });
+    return response;
+  }
+
+  /**
+   * Send a turn (message) to a thread and capture the full response.
+   * Returns when the turn is complete.
+   *
+   * @param {string} threadId
+   * @param {string} prompt
+   * @param {{ model?: string, effort?: string }} options
+   * @returns {Promise<TurnResult>}
+   */
+  async sendTurn(threadId, prompt, options = {}) {
+    const state = {
+      threadId,
+      turnId: null,
+      lastMessage: "",
+      reviewText: "",
+      fileChanges: [],
+      commandExecutions: [],
+      error: null,
+      completed: false,
+      messages: [],
+    };
+
+    // Set up notification handler to capture turn progress
+    const prevHandler = this.onNotification;
+    this.onNotification = (notification) => {
+      this._processTurnNotification(notification, state);
+      if (prevHandler) prevHandler(notification);
+    };
+
+    try {
+      const response = await this.request("turn/start", {
+        threadId,
+        input: [{ type: "text", text: prompt, text_elements: [] }],
+        model: options.model ?? null,
+        effort: options.effort ?? null,
+        outputSchema: null,
+      });
+
+      // Wait for turn completion via notifications
+      if (!state.completed) {
+        await this._waitForTurnCompletion(state, 300000); // 5 min timeout
+      }
+
+      state.turnId = state.turnId ?? response?.turnId ?? null;
+    } catch (error) {
+      state.error = error;
+    } finally {
+      this.onNotification = prevHandler;
+    }
+
+    return state;
+  }
+
+  /**
+   * Start a review on a thread.
+   * @param {string} threadId
+   * @param {{ target?: object }} options
+   * @returns {Promise<TurnResult>}
+   */
+  async startReview(threadId, options = {}) {
+    const state = {
+      threadId,
+      turnId: null,
+      lastMessage: "",
+      reviewText: "",
+      fileChanges: [],
+      commandExecutions: [],
+      error: null,
+      completed: false,
+      messages: [],
+    };
+
+    const prevHandler = this.onNotification;
+    this.onNotification = (notification) => {
+      this._processTurnNotification(notification, state);
+      if (prevHandler) prevHandler(notification);
+    };
+
+    try {
+      await this.request("review/start", {
+        threadId,
+        delivery: "inline",
+        target: options.target ?? { type: "uncommittedChanges" },
+      });
+
+      if (!state.completed) {
+        await this._waitForTurnCompletion(state, 600000); // 10 min for reviews
+      }
+    } catch (error) {
+      state.error = error;
+    } finally {
+      this.onNotification = prevHandler;
+    }
+
+    return state;
+  }
+
+  /**
+   * Interrupt a running turn.
+   * @param {string} threadId
+   * @param {string} turnId
+   */
+  async interruptTurn(threadId, turnId) {
+    try {
+      await this.request("turn/interrupt", { threadId, turnId });
+      return { interrupted: true };
+    } catch (error) {
+      return { interrupted: false, detail: error.message };
+    }
+  }
+
+  /**
+   * Close the app server connection.
+   */
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+
+    if (this.rl) this.rl.close();
+    if (this.proc && !this.proc.killed) {
+      this.proc.stdin.end();
+      setTimeout(() => {
+        if (this.proc && !this.proc.killed) this.proc.kill("SIGTERM");
+      }, 100);
+    }
+  }
+
+  // ── Internal ──────────────────────────────────────────────────────
+
+  _send(message) {
+    if (!this.proc?.stdin) throw new Error("App server stdin not available.");
+    this.proc.stdin.write(JSON.stringify(message) + "\n");
+  }
+
+  _handleLine(line) {
+    if (!line.trim()) return;
+
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return;
+    }
+
+    // Response to a request
+    if (message.id !== undefined && !message.method) {
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      this.pending.delete(message.id);
+
+      if (message.error) {
+        const err = new Error(
+          message.error.message ?? `App server ${pending.method} failed`
+        );
+        err.data = message.error;
+        pending.reject(err);
+      } else {
+        pending.resolve(message.result ?? {});
+      }
+      return;
+    }
+
+    // Server request (we auto-reject — we don't handle server-initiated requests)
+    if (message.id !== undefined && message.method) {
+      this._send({
+        id: message.id,
+        error: { code: -32601, message: `Unsupported: ${message.method}` },
+      });
+      return;
+    }
+
+    // Notification
+    if (message.method && this.onNotification) {
+      this.onNotification(message);
+    }
+  }
+
+  _processTurnNotification(notification, state) {
+    const method = notification.method;
+    const params = notification.params ?? {};
+
+    switch (method) {
+      case "turn/started":
+        state.turnId = params.turn?.id ?? params.turnId ?? state.turnId;
+        this._emitProgress("Codex turn started.", "running");
+        break;
+
+      case "turn/completed":
+        state.completed = true;
+        state.turnId = params.turn?.id ?? params.turnId ?? state.turnId;
+        this._emitProgress("Codex turn completed.", "done");
+        break;
+
+      case "turn/error":
+        state.completed = true;
+        state.error = params.error ?? params.message ?? "Turn error";
+        this._emitProgress(`Codex error: ${state.error}`, "error");
+        break;
+
+      case "item/agentMessage":
+        state.lastMessage = params.text ?? params.message ?? "";
+        if (state.lastMessage) {
+          state.messages.push({ phase: "agent", text: state.lastMessage });
+        }
+        break;
+
+      case "item/reviewResult":
+        state.reviewText = params.text ?? params.review ?? "";
+        break;
+
+      case "item/started": {
+        const item = params.item ?? params;
+        if (item.type === "fileChange") {
+          state.fileChanges.push(item);
+          const count = item.changes?.length ?? 0;
+          this._emitProgress(`File change: ${count} edit(s).`, "editing");
+        } else if (item.type === "commandExecution") {
+          state.commandExecutions.push(item);
+          const cmd = item.command ?? "";
+          this._emitProgress(`Running: ${cmd.slice(0, 80)}`, "running");
+        }
+        break;
+      }
+
+      case "item/completed": {
+        const item = params.item ?? params;
+        if (item.type === "commandExecution") {
+          const cmd = item.command ?? "";
+          const exit = item.exitCode ?? item.exit_code;
+          this._emitProgress(
+            `Command finished (exit ${exit}): ${cmd.slice(0, 60)}`,
+            exit === 0 ? "running" : "error"
+          );
+        }
+        break;
+      }
+    }
+  }
+
+  _emitProgress(message, phase) {
+    if (this.onProgress) {
+      this.onProgress({ message, phase });
+    }
+  }
+
+  _waitForTurnCompletion(state, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const interval = setInterval(() => {
+        if (state.completed || state.error) {
+          clearInterval(interval);
+          clearTimeout(timer);
+          resolve(state);
+        }
+      }, 200);
+
+      const timer = setTimeout(() => {
+        clearInterval(interval);
+        state.error = "Turn timed out.";
+        state.completed = true;
+        resolve(state);
+      }, timeoutMs);
+    });
+  }
+
+  _rejectAll(error) {
+    for (const pending of this.pending.values()) {
+      pending.reject(error ?? new Error("App server connection closed."));
+    }
+    this.pending.clear();
+  }
+}
+
+/**
+ * Create and connect an app server client.
+ * @param {string} cwd
+ * @param {object} [options]
+ * @returns {Promise<CodexAppServer>}
+ */
+export async function connectAppServer(cwd, options = {}) {
+  const server = new CodexAppServer(cwd, options);
+  await server.connect();
+  return server;
+}
