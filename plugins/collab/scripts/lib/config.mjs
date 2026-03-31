@@ -8,7 +8,7 @@ const DEFAULTS = {
   architect: null,
   maxDebateRounds: 20,
   turnTimeoutMs: 600000, // 10 minutes
-  idleTimeoutMs: 30000, // 30 seconds idle before assuming turn done
+  idleTimeoutMs: 60000, // 60 seconds idle before assuming turn done
   codexSandbox: "workspace-write",
   codexDebateSandbox: "read-only",
 };

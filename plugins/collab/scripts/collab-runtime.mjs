@@ -311,6 +311,11 @@ async function handleDebateStart(argv) {
     // Log Codex's response
     addMessage(session, "codex", result.lastMessage || result.reviewText || "", CWD);
 
+    // Surface server stderr when Codex returned nothing — aids debugging
+    if (!result.lastMessage && !result.reviewText && server.stderr) {
+      output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
+    }
+
     // Output for Claude to read
     output(renderCodexResponse(result));
   } finally {
@@ -362,6 +367,11 @@ async function handleDebateTurn(argv) {
     });
 
     addMessage(session, "codex", result.lastMessage || "", CWD);
+
+    if (!result.lastMessage && server.stderr) {
+      output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
+    }
+
     output(renderCodexResponse(result));
   } finally {
     await server.close();
@@ -445,6 +455,10 @@ async function handleExecute(argv) {
     addMessage(session, "codex", result.lastMessage || "", CWD);
     saveSession(session, CWD);
 
+    if (!result.lastMessage && server.stderr) {
+      output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
+    }
+
     output(renderExecutionResult(result));
   } finally {
     await server.close();
@@ -494,6 +508,10 @@ async function handleExecuteContinue(argv) {
 
     addMessage(session, "codex", result.lastMessage || "", CWD);
     saveSession(session, CWD);
+
+    if (!result.lastMessage && server.stderr) {
+      output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
+    }
 
     output(renderExecutionResult(result));
   } finally {

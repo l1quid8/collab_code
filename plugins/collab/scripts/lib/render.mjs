@@ -193,6 +193,7 @@ export function renderConfig(config) {
   lines.push(`  debate sandbox:     ${config.codexDebateSandbox}`);
   lines.push(`  max debate rounds:  ${config.maxDebateRounds}`);
   lines.push(`  turn timeout:       ${config.turnTimeoutMs / 1000}s`);
+  lines.push(`  idle timeout:       ${config.idleTimeoutMs / 1000}s`);
   lines.push("");
   return lines.join("\n");
 }
