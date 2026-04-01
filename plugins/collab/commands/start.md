@@ -164,3 +164,4 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-complete rejecte
 - **Concede when Codex makes a better argument.** You are collaborating, not competing.
 - **The debate loop has no fixed limit.** Keep going until genuine convergence. Don't rush to approval.
 - **Halt means halt.** If the user halts during planning/debate, nothing touches disk. During execute/review, files may already exist; verify with `git status` before discard. Sessions can be resumed via `session-activate`.
+- **One round means focused, not exhaustive.** If the user selected "One round" at the mode selector, keep the first Codex exchange concise — surface the most critical concerns only, not every possible edge case. The per-turn prompt still appears after; the user decides whether to continue debating.
