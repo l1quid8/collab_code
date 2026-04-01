@@ -50,7 +50,7 @@ This is YOUR job. You are the architect. Think deeply about the task.
 
 Write the plan in your response. Be thorough — this is what Codex will review and debate.
 
-After writing the plan, ask the user how to proceed using `AskUserQuestion`:
+**Do not call `debate-start`. Do not proceed to Phase 2.** You must ask the user how to proceed first. Call `AskUserQuestion` now:
 - Question: `"Plan ready — how do you want to proceed?"`
 - Header: `"Mode"`
 - Option 1: label `Full debate`, description `"Codex reviews your plan; debate until converged"`
