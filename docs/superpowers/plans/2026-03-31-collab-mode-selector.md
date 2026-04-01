@@ -1,5 +1,7 @@
 # Collab Mode Selector & Rich Debate Prompts — Implementation Plan
 
+> **Note (v0.1.10):** AskUserQuestion per-option "notes field:" syntax was invalid. Corrected in v0.1.10 — see start.md and spec doc for the current pattern.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a mode selector after the plan phase and replace the `Approve / Interject / Halt` prompt with a richer per-turn prompt that has inline text input on every option.

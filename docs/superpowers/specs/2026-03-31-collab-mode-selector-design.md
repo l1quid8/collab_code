@@ -17,7 +17,7 @@ The collab plugin always runs a full debate phase regardless of task complexity.
 Two changes to `start.md`:
 
 1. **Mode selector** — after Claude writes the plan, ask the user how to proceed before calling `debate-start`
-2. **Rich per-turn prompt** — replace the `Approve / Interject / Halt` prompt with a richer version that has an inline text field on every option
+2. **Rich per-turn prompt** — replace the `Approve / Interject / Halt` prompt with a richer version that captures user notes from `annotations`
 
 ---
 
@@ -27,11 +27,13 @@ After Claude presents the plan, present an `AskUserQuestion`:
 
 > *"Plan ready — how do you want to proceed?"*
 
-| Option | Description | Notes field |
-|--------|-------------|-------------|
-| **Full debate** | Codex reviews your plan; debate until converged | Focus areas for Codex |
-| **One round** | Codex reviews once, you decide after seeing the response | Focus areas |
-| **Execute directly** | Skip debate, send to Codex for implementation now | Extra context for Codex |
+| Option | Description |
+|--------|-------------|
+| **Full debate** | Codex reviews your plan; debate until converged |
+| **One round** | Codex reviews once, you decide after seeing the response |
+| **Execute directly** | Skip debate, send to Codex for implementation now |
+
+Options support `label` and `description` only. User notes are returned in `annotations["Plan ready — how do you want to proceed?"].notes` after the call.
 
 **Note injection:**
 - Full debate / One round → notes prepended as `[User context: <notes>]` at the top of the `debate-start` prompt
@@ -47,11 +49,13 @@ After every Codex response (whether from `debate-start` or `debate-turn`), repla
 
 > *"How do you want to proceed?"*
 
-| Option | Description | Notes field |
-|--------|-------------|-------------|
-| **Proceed to execute** | Send the converged plan to Codex for implementation | Final context or constraints for Codex |
-| **Continue debating** | Send another turn to Codex | Direction for next turn — Claude incorporates this |
-| **Halt** | Stop and save session | Reason (saved via `session-note`) |
+| Option | Description |
+|--------|-------------|
+| **Proceed to execute** | Send the converged plan to Codex for implementation |
+| **Continue debating** | Send another turn to Codex |
+| **Halt** | Stop and save session |
+
+Options support `label` and `description` only. User notes are returned in `annotations["How do you want to proceed?"].notes` after the call.
 
 **Note injection:**
 - **Continue debating** with notes → Claude weaves the user's direction into its architect response before calling `debate-turn`. The notes are not passed verbatim — Claude interprets and integrates them.

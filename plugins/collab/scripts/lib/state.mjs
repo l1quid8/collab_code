@@ -17,6 +17,7 @@ const KNOWLEDGE_FILE = "knowledge.json";
  *   plan: string | null,
  *   convergedPlan: string | null,
  *   decisions: Array<{ description: string, proposedBy: string, decidedBy: string | null }>,
+ *   notes: string[],
  *   bugsCaught: string[],
  *   filesCreated: string[],
  *   filesModified: string[],
@@ -50,6 +51,7 @@ function nowIso() {
 function normalizeSession(session) {
   if (!session || typeof session !== "object") return session;
   if (!Array.isArray(session.decisions)) session.decisions = [];
+  if (!Array.isArray(session.notes)) session.notes = [];
   if (!Array.isArray(session.bugsCaught)) session.bugsCaught = [];
   if (!Array.isArray(session.filesCreated)) session.filesCreated = [];
   if (!Array.isArray(session.filesModified)) session.filesModified = [];
@@ -89,6 +91,7 @@ export function createSession(task, cwd) {
     plan: null,
     convergedPlan: null,
     decisions: [],
+    notes: [],
     bugsCaught: [],
     filesCreated: [],
     filesModified: [],

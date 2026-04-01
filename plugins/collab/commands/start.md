@@ -52,9 +52,12 @@ Write the plan in your response. Be thorough — this is what Codex will review 
 
 After writing the plan, ask the user how to proceed using `AskUserQuestion`:
 - Question: `"Plan ready — how do you want to proceed?"`
-- Option 1: label `Full debate`, description `"Codex reviews your plan; debate until converged"`, notes field: `"Focus areas for Codex (optional)"`
-- Option 2: label `One round`, description `"Codex reviews once, you decide after seeing the response"`, notes field: `"Focus areas (optional)"`
-- Option 3: label `Execute directly`, description `"Skip debate, send to Codex for implementation now"`, notes field: `"Extra context for Codex (optional)"`
+- Header: `"Mode"`
+- Option 1: label `Full debate`, description `"Codex reviews your plan; debate until converged"`
+- Option 2: label `One round`, description `"Codex reviews once, you decide after seeing the response"`
+- Option 3: label `Execute directly`, description `"Skip debate, send to Codex for implementation now"`
+
+Read notes from `annotations["Plan ready — how do you want to proceed?"].notes`. If the key is absent or empty, treat notes as an empty string.
 
 **If "Execute directly":** If the user provided notes, append them to the plan as `[User additions: <notes>]`. Skip Phase 2. Proceed to Phase 3.
 
@@ -82,11 +85,14 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" debate-turn "<your respo
 
 After each Codex response, use `AskUserQuestion`:
 - Question: `"How do you want to proceed?"`
-- Option 1: label `Proceed to execute`, description `"Send converged plan to Codex for implementation"`, notes field: `"Final context or constraints for Codex (optional)"`
-- Option 2: label `Continue debating`, description `"Send another turn to Codex"`, notes field: `"Direction for next turn — Claude will incorporate this"`
-- Option 3: label `Halt`, description `"Stop and save session for later"`, notes field: `"Reason (optional)"`
+- Header: `"Turn"`
+- Option 1: label `Proceed to execute`, description `"Send converged plan to Codex for implementation"`
+- Option 2: label `Continue debating`, description `"Send another turn to Codex"`
+- Option 3: label `Halt`, description `"Stop and save session for later"`
 
-**If "Continue debating":** Read the user's notes. Weave their direction into your architect response — don't quote verbatim, integrate it naturally. Send via `debate-turn`. Continue the loop.
+Read notes from `annotations["How do you want to proceed?"].notes`. If the key is absent or empty, treat notes as an empty string.
+
+**If "Continue debating":** Weave notes into your architect response — don't quote verbatim, integrate naturally. Send via `debate-turn`. Continue the loop.
 
 **If "Proceed to execute":** If notes provided, append to the converged plan as `[User additions: <notes>]`. Proceed to Phase 3.
 
