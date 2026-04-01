@@ -50,6 +50,16 @@ This is YOUR job. You are the architect. Think deeply about the task.
 
 Write the plan in your response. Be thorough — this is what Codex will review and debate.
 
+After writing the plan, ask the user how to proceed using `AskUserQuestion`:
+- Question: `"Plan ready — how do you want to proceed?"`
+- Option 1: label `Full debate`, description `"Codex reviews your plan; debate until converged"`, notes field: `"Focus areas for Codex (optional)"`
+- Option 2: label `One round`, description `"Codex reviews once, you decide after seeing the response"`, notes field: `"Focus areas (optional)"`
+- Option 3: label `Execute directly`, description `"Skip debate, send to Codex for implementation now"`, notes field: `"Extra context for Codex (optional)"`
+
+**If "Execute directly":** If the user provided notes, append them to the plan as `[User additions: <notes>]`. Skip Phase 2. Proceed to Phase 3.
+
+**If "Full debate" or "One round":** If the user provided notes, prepend them as `[User context: <notes>]` at the top of the prompt passed to `debate-start`. Proceed to Phase 2.
+
 ## Phase 2: Debate
 
 Send your plan to Codex for review:
