@@ -7,7 +7,7 @@ const CONFIG_FILE = "config.json";
 const DEFAULTS = {
   architect: null,
   turnTimeoutMs: 600000, // 10 minutes
-  idleTimeoutMs: 60000, // 60 seconds idle before assuming turn done
+  idleTimeoutMs: 60000, // 60 seconds between idle heartbeats (does not terminate turn)
   codexSandbox: "workspace-write",
   codexDebateSandbox: "read-only",
   codexSelfReview: true,
