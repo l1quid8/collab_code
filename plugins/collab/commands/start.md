@@ -80,21 +80,26 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" debate-turn "<your respo
 
 **This is a loop.** Continue debating until you and Codex converge on a plan.
 
-After each exchange, use `AskUserQuestion` with three options:
-- `Approve — send converged plan to Codex for execution`
-- `Interject — I want to add context`
-- `Halt — stop everything, save plan for later`
+After each Codex response, use `AskUserQuestion`:
+- Question: `"How do you want to proceed?"`
+- Option 1: label `Proceed to execute`, description `"Send converged plan to Codex for implementation"`, notes field: `"Final context or constraints for Codex (optional)"`
+- Option 2: label `Continue debating`, description `"Send another turn to Codex"`, notes field: `"Direction for next turn — Claude will incorporate this"`
+- Option 3: label `Halt`, description `"Stop and save session for later"`, notes field: `"Reason (optional)"`
 
-**If the user chooses Interject:** Read their input. Incorporate it. Send it to Codex via another `debate-turn`. Continue the loop.
+**If "Continue debating":** Read the user's notes. Weave their direction into your architect response — don't quote verbatim, integrate it naturally. Send via `debate-turn`. Continue the loop.
 
-**If the user chooses Halt:**
+**If "Proceed to execute":** If notes provided, append to the converged plan as `[User additions: <notes>]`. Proceed to Phase 3.
+
+**If "Halt":** If notes provided, save them first:
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-note --type note --text "<notes>"
+```
+Then halt:
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-halt
 ```
 Tell the user: "Session halted. No files were written. To resume this session later, use: node ...collab-runtime.mjs session-activate <session-id> — then continue with debate-turn (debate phase) or execute-continue (execute/review phase). Find session IDs with: node ...collab-runtime.mjs session-list"
 Stop here. Do not proceed to execution.
-
-**If the user chooses Approve:** Proceed to Phase 3.
 
 ## Phase 3: Execute
 
