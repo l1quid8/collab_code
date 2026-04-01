@@ -7,12 +7,37 @@
  */
 
 import { spawn } from "node:child_process";
+import path from "node:path";
 import readline from "node:readline";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+function loadPluginVersion() {
+  try {
+    const pluginJsonPath = path.resolve(
+      MODULE_DIR,
+      "../../../.claude-plugin/plugin.json"
+    );
+    const pluginJson = require(pluginJsonPath);
+    const version = pluginJson?.version;
+    if (typeof version === "string" && version.trim() !== "") {
+      return version;
+    }
+  } catch {
+    // Fall through to default.
+  }
+  return "0.0.0";
+}
+
+const PLUGIN_VERSION = loadPluginVersion();
 
 const CLIENT_INFO = {
   title: "Collab Plugin",
   name: "Claude Code Collab",
-  version: "0.1.0",
+  version: PLUGIN_VERSION,
 };
 
 const CAPABILITIES = {
@@ -150,7 +175,7 @@ export class CodexAppServer {
    *
    * @param {string} threadId
    * @param {string} prompt
-   * @param {{ model?: string, effort?: string }} options
+   * @param {{ model?: string, effort?: string, timeoutMs?: number, idleTimeoutMs?: number, onTurnStarted?: (info: { threadId: string, turnId: string }) => void | Promise<void> }} options
    * @returns {Promise<TurnResult>}
    */
   async sendTurn(threadId, prompt, options = {}) {
@@ -184,6 +209,13 @@ export class CodexAppServer {
         effort: options.effort ?? null,
         outputSchema: null,
       });
+      const turnId = state.turnId ?? response?.turn?.id ?? response?.turnId ?? null;
+      if (turnId) {
+        state.turnId = turnId;
+        if (typeof options.onTurnStarted === "function") {
+          await options.onTurnStarted({ threadId, turnId });
+        }
+      }
       state._lastNotificationAt = Date.now();
 
       // Wait for turn completion via notifications
@@ -267,16 +299,23 @@ export class CodexAppServer {
   /**
    * Close the app server connection.
    */
-  async close() {
+  async close(opts = {}) {
     if (this.closed) return;
     this.closed = true;
+    const force = opts.force === true;
 
     if (this.rl) this.rl.close();
     if (this.proc && !this.proc.killed) {
+      const proc = this.proc;
       this.proc.stdin.end();
       setTimeout(() => {
-        if (this.proc && !this.proc.killed) this.proc.kill("SIGTERM");
-      }, 100);
+        if (proc && !proc.killed) proc.kill("SIGTERM");
+      }, force ? 50 : 100);
+      if (force) {
+        setTimeout(() => {
+          if (proc && !proc.killed) proc.kill("SIGKILL");
+        }, 300);
+      }
     }
   }
 
@@ -383,6 +422,8 @@ export class CodexAppServer {
 
       case "item/reviewResult":
         state.reviewText = params.text ?? params.review ?? "";
+        state.completed = true;
+        this._emitProgress("Codex review complete.", "done");
         break;
 
       case "item/started": {

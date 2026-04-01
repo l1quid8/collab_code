@@ -137,6 +137,13 @@ export function renderExecutionResult(turnResult, opts = {}) {
     lines.push(turnResult.lastMessage);
   }
 
+  const selfReviewText = turnResult.reviewText || turnResult.selfReviewText;
+  if (selfReviewText) {
+    lines.push("");
+    lines.push("[CODEX SELF-REVIEW]");
+    lines.push(selfReviewText);
+  }
+
   return lines.join("\n");
 }
 
@@ -199,6 +206,7 @@ export function renderConfig(config) {
   );
   lines.push(`  codex sandbox:      ${config.codexSandbox}`);
   lines.push(`  debate sandbox:     ${config.codexDebateSandbox}`);
+  lines.push(`  codex self-review:  ${config.codexSelfReview ? "enabled" : "disabled"}`);
   lines.push(`  turn timeout:       ${config.turnTimeoutMs / 1000}s`);
   lines.push(`  idle timeout:       ${config.idleTimeoutMs / 1000}s`);
   lines.push("");

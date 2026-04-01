@@ -4,6 +4,7 @@ import path from "node:path";
 const STATE_DIR = ".collab";
 const SESSIONS_DIR = "sessions";
 const ACTIVE_FILE = "active-session.json";
+const KNOWLEDGE_FILE = "knowledge.json";
 
 /**
  * @typedef {{
@@ -19,6 +20,8 @@ const ACTIVE_FILE = "active-session.json";
  *   bugsCaught: string[],
  *   filesCreated: string[],
  *   filesModified: string[],
+ *   resumeEvents: Array<{ resumedAt: string, previousStatus: string }>,
+ *   pendingTurn: { threadId: string, turnId: string, startedAt: string } | null,
  *   gitBaseline: Record<string, string> | null,
  *   startedAt: string,
  *   completedAt: string | null,
@@ -42,6 +45,23 @@ function ensureDirs(cwd) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function normalizeSession(session) {
+  if (!session || typeof session !== "object") return session;
+  if (!Array.isArray(session.decisions)) session.decisions = [];
+  if (!Array.isArray(session.bugsCaught)) session.bugsCaught = [];
+  if (!Array.isArray(session.filesCreated)) session.filesCreated = [];
+  if (!Array.isArray(session.filesModified)) session.filesModified = [];
+  if (!Array.isArray(session.resumeEvents)) session.resumeEvents = [];
+  if (
+    session.pendingTurn == null ||
+    typeof session.pendingTurn !== "object" ||
+    Array.isArray(session.pendingTurn)
+  ) {
+    session.pendingTurn = null;
+  }
+  return session;
 }
 
 function generateSessionId() {
@@ -72,6 +92,8 @@ export function createSession(task, cwd) {
     bugsCaught: [],
     filesCreated: [],
     filesModified: [],
+    resumeEvents: [],
+    pendingTurn: null,
     gitBaseline: null,
     startedAt: nowIso(),
     completedAt: null,
@@ -92,10 +114,6 @@ export function saveSession(session, cwd) {
   const dir = ensureDirs(cwd);
   const filePath = path.join(dir, `${session.id}.json`);
   fs.writeFileSync(filePath, JSON.stringify(session, null, 2) + "\n");
-
-  // Also write latest-session mirror file (not a symlink — plain file copy)
-  const latestPath = path.join(resolveStateDir(cwd), "session-latest.json");
-  fs.writeFileSync(latestPath, JSON.stringify(session, null, 2) + "\n");
 }
 
 /**
@@ -107,21 +125,8 @@ export function saveSession(session, cwd) {
 export function loadSession(id, cwd) {
   const filePath = path.join(resolveSessionsDir(cwd), `${id}.json`);
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Load the latest session.
- * @param {string} [cwd]
- * @returns {Session | null}
- */
-export function loadLatestSession(cwd) {
-  const latestPath = path.join(resolveStateDir(cwd), "session-latest.json");
-  try {
-    return JSON.parse(fs.readFileSync(latestPath, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return normalizeSession(parsed);
   } catch {
     return null;
   }
@@ -203,6 +208,39 @@ export function completeSession(session, status, cwd) {
 }
 
 /**
+ * Resume a halted session.
+ * @param {Session} session
+ * @param {string} [cwd]
+ */
+export function resumeSession(session, cwd) {
+  normalizeSession(session);
+  session.resumeEvents.push({
+    resumedAt: nowIso(),
+    previousStatus: session.status ?? "unknown",
+  });
+  session.status = "active";
+  session.completedAt = null;
+  saveSession(session, cwd);
+  setActiveSession(session.id, cwd);
+}
+
+/**
+ * Delete a session by ID.
+ * @param {string} id
+ * @param {string} [cwd]
+ * @returns {boolean}
+ */
+export function deleteSession(id, cwd) {
+  const filePath = path.join(resolveSessionsDir(cwd), `${id}.json`);
+  try {
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * List all sessions.
  * @param {string} [cwd]
  * @returns {Session[]}
@@ -213,9 +251,85 @@ export function listSessions(cwd) {
     return fs
       .readdirSync(dir)
       .filter((f) => f.endsWith(".json"))
-      .map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")))
+      .map((f) => normalizeSession(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"))))
       .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
   } catch {
     return [];
   }
+}
+
+/**
+ * Load the cross-session decision knowledge base.
+ * @param {string} [cwd]
+ * @returns {Array<{ description: string, decidedBy: string | null, sessionId: string, date: string | null }>}
+ */
+export function loadKnowledge(cwd) {
+  const filePath = path.join(resolveStateDir(cwd), KNOWLEDGE_FILE);
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save the cross-session decision knowledge base atomically.
+ * @param {Array<object>} entries
+ * @param {string} [cwd]
+ */
+export function saveKnowledge(entries, cwd) {
+  const stateDir = resolveStateDir(cwd);
+  fs.mkdirSync(stateDir, { recursive: true });
+
+  const knowledgePath = path.join(stateDir, KNOWLEDGE_FILE);
+  const tmpPath = `${knowledgePath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(entries, null, 2) + "\n");
+  fs.renameSync(tmpPath, knowledgePath);
+}
+
+/**
+ * Add unique decisions from a completed session into the knowledge base.
+ * @param {Session} session
+ * @param {string} [cwd]
+ */
+export function appendDecisionsToKnowledge(session, cwd) {
+  const existing = loadKnowledge(cwd);
+  const deduped = new Map();
+
+  for (const entry of existing) {
+    const description = typeof entry?.description === "string" ? entry.description.trim() : "";
+    const sessionId = typeof entry?.sessionId === "string" ? entry.sessionId : "";
+    if (!description || !sessionId) continue;
+    const key = `${sessionId}::${description}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, {
+        description,
+        decidedBy: entry.decidedBy ?? null,
+        sessionId,
+        date: entry.date ?? null,
+      });
+    }
+  }
+
+  for (const decision of session.decisions ?? []) {
+    const description =
+      typeof decision?.description === "string" ? decision.description.trim() : "";
+    if (!description) continue;
+
+    const key = `${session.id}::${description}`;
+    if (deduped.has(key)) continue;
+    deduped.set(key, {
+      description,
+      decidedBy: decision.decidedBy ?? null,
+      sessionId: session.id,
+      date: session.completedAt ?? null,
+    });
+  }
+
+  const sorted = Array.from(deduped.values()).sort((a, b) =>
+    (b.date ?? "").localeCompare(a.date ?? "")
+  );
+  const capped = sorted.slice(0, 20);
+  saveKnowledge(capped, cwd);
 }

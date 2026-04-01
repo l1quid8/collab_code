@@ -10,6 +10,7 @@ const DEFAULTS = {
   idleTimeoutMs: 60000, // 60 seconds idle before assuming turn done
   codexSandbox: "workspace-write",
   codexDebateSandbox: "read-only",
+  codexSelfReview: true,
 };
 
 /**
@@ -62,22 +63,4 @@ export function setConfigValue(key, value, cwd) {
   config[key] = value;
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   return config;
-}
-
-/**
- * Get a single config value.
- * @param {string} key
- * @param {string} [cwd]
- */
-export function getConfigValue(key, cwd) {
-  return loadConfig(cwd)[key] ?? DEFAULTS[key] ?? null;
-}
-
-/**
- * Check if the architect model has been configured.
- * @param {string} [cwd]
- * @returns {boolean}
- */
-export function isArchitectConfigured(cwd) {
-  return loadConfig(cwd).architect != null;
 }

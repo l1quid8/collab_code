@@ -14,16 +14,15 @@
  *   session-create <task>          Create a new session
  *   session-list                   List existing sessions
  *   session-activate <id>          Reactivate an active session by ID
+ *   session-prune                  Delete old non-active sessions
  *   session-note                   Add bug/decision/note to the active session
  *   session-status                 Show active session status
  *   session-halt                   Halt active session
  *   session-complete <status>      Mark session as complete
+ *   turn-interrupt                 Show the currently pending turn metadata
  */
 
-import path from "node:path";
 import process from "node:process";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import { parseArgs } from "./lib/args.mjs";
@@ -39,6 +38,10 @@ import {
   getActiveSessionId,
   setActiveSession,
   listSessions,
+  deleteSession,
+  resumeSession,
+  loadKnowledge,
+  appendDecisionsToKnowledge,
 } from "./lib/state.mjs";
 import { connectAppServer } from "./lib/app-server.mjs";
 import {
@@ -50,6 +53,8 @@ import {
 } from "./lib/render.mjs";
 
 const CWD = process.cwd();
+let activeServer = null;
+let shuttingDown = false;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -82,6 +87,7 @@ function printUsage() {
       '  collab-runtime session-create "<task>"',
       "  collab-runtime session-list",
       "  collab-runtime session-activate <session-id>",
+      "  collab-runtime session-prune [--older-than <days>] [--status <csv>] [--dry-run]",
       '  collab-runtime session-note --type <bug|decision|note> --text "<text>"',
       '  collab-runtime session-status',
       '  collab-runtime session-halt',
@@ -90,13 +96,9 @@ function printUsage() {
       '  collab-runtime debate-turn "<follow-up message>"',
       '  collab-runtime execute "<converged plan>"',
       '  collab-runtime execute-continue "<fix request>"',
+      "  collab-runtime turn-interrupt",
     ].join("\n")
   );
-}
-
-function fail(message) {
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
 }
 
 function output(value, asJson = false) {
@@ -107,6 +109,10 @@ function output(value, asJson = false) {
   } else {
     console.log(JSON.stringify(value, null, 2));
   }
+}
+
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function getActiveSession() {
@@ -452,6 +458,9 @@ function handleSessionComplete(argv) {
 
   const session = requireActiveSession();
   completeSession(session, status, CWD);
+  if (status === "completed") {
+    appendDecisionsToKnowledge(session, CWD);
+  }
   output(renderSessionSummary(session));
 }
 
@@ -462,14 +471,29 @@ function handleSessionActivate(argv) {
   const session = loadSession(sessionId, CWD);
   if (!session) throw new Error("Session not found: " + sessionId);
 
-  if (session.status !== "active") {
+  if (session.status !== "active" && session.status !== "halted") {
     throw new Error(
       'Cannot activate session ' +
         sessionId +
         ': status is "' +
         session.status +
-        '". Only sessions with status "active" can be reactivated.'
+        '". Only sessions with status "active" or "halted" can be activated.'
     );
+  }
+
+  if (session.status === "halted") {
+    resumeSession(session, CWD);
+    output(
+      JSON.stringify({
+        status: "resumed",
+        sessionId: session.id,
+        task: session.task,
+        phase: session.phase,
+        warning:
+          "This session was previously halted. Files may have already been written; run git status before continuing.",
+      }) + "\n"
+    );
+    return;
   }
 
   setActiveSession(sessionId, CWD);
@@ -483,6 +507,98 @@ function handleSessionActivate(argv) {
         "Session reactivated at phase: " +
         session.phase +
         ". Use debate-turn (if in debate) or execute-continue (if in execute/review).",
+    }) + "\n"
+  );
+}
+
+function handleSessionPrune(argv) {
+  const { options } = parseArgs(argv, {
+    valueOptions: ["older-than", "status"],
+    booleanOptions: ["dry-run"],
+  });
+
+  let olderThanDays = null;
+  if (options["older-than"] != null) {
+    olderThanDays = Number(options["older-than"]);
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 0) {
+      throw new Error("Invalid --older-than value. Provide a non-negative number of days.");
+    }
+  }
+
+  let statusFilter = null;
+  if (options.status != null) {
+    statusFilter = new Set(
+      String(options.status)
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    );
+    if (statusFilter.size === 0) {
+      throw new Error("Invalid --status value. Provide a comma-separated list of statuses.");
+    }
+  }
+
+  const activeSessionId = getActiveSessionId(CWD);
+  const sessions = listSessions(CWD);
+  const nowMs = Date.now();
+
+  const candidates = sessions.filter((session) => {
+    if (!session?.id) return false;
+    if (session.id === activeSessionId) return false;
+    if (session.status === "active") return false;
+    if (statusFilter && !statusFilter.has(session.status ?? "")) return false;
+
+    if (olderThanDays != null) {
+      const referenceDate = session.completedAt ?? session.startedAt;
+      const timestamp = Date.parse(referenceDate ?? "");
+      if (!Number.isFinite(timestamp)) return false;
+      const ageDays = (nowMs - timestamp) / (1000 * 60 * 60 * 24);
+      if (ageDays < olderThanDays) return false;
+    }
+
+    return true;
+  });
+
+  if (candidates.length === 0) {
+    output("No sessions matched prune criteria.\n");
+    return;
+  }
+
+  for (const session of candidates) {
+    const date = String(session.completedAt ?? session.startedAt ?? "")
+      .slice(0, 16)
+      .replace("T", " ");
+    const status = String(session.status ?? "unknown").padEnd(10);
+    const task = String(session.task ?? "").slice(0, 55);
+    output(`  ${status} ${date}  ${session.id}  ${task}\n`);
+  }
+
+  if (options["dry-run"]) {
+    output(`Matched ${candidates.length} session(s). (--dry-run, no changes made)\n`);
+    return;
+  }
+
+  let pruned = 0;
+  for (const session of candidates) {
+    if (deleteSession(session.id, CWD)) pruned += 1;
+  }
+  output(`Pruned ${pruned} session(s).\n`);
+}
+
+function handleTurnInterrupt() {
+  const session = requireActiveSession();
+  if (!session.pendingTurn) {
+    throw new Error(
+      "No pending turn found. A turn must be actively running before turn-interrupt can inspect it."
+    );
+  }
+
+  output(
+    JSON.stringify({
+      status: "pending-turn-found",
+      pendingTurn: session.pendingTurn,
+      note:
+        "EXPERIMENTAL: in-process interruption is not yet supported. This command reports what would be interrupted.",
     }) + "\n"
   );
 }
@@ -502,6 +618,27 @@ async function handleDebateStart(argv) {
   addMessage(session, "claude", plan, CWD);
 
   const config = loadConfig(CWD);
+  const priorDecisions = loadKnowledge(CWD).slice(0, 5);
+  const escapeXml = (value) =>
+    String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&apos;");
+  const priorDecisionsBlock =
+    priorDecisions.length > 0
+      ? [
+          '<past_decisions advisory="true">',
+          "Advisory context from previous completed sessions:",
+          ...priorDecisions.map(
+            (entry, index) =>
+              `  <decision index="${index + 1}" sessionId="${escapeXml(entry.sessionId ?? "unknown")}" decidedBy="${escapeXml(entry.decidedBy ?? "unknown")}" date="${escapeXml(entry.date ?? "unknown")}">${escapeXml(entry.description ?? "")}</decision>`
+          ),
+          "</past_decisions>",
+          "",
+        ].join("\n")
+      : "";
 
   // Connect to Codex app server
   const server = await connectAppServer(CWD, {
@@ -510,6 +647,7 @@ async function handleDebateStart(argv) {
     },
     onAgentDelta: streamer.onAgentDelta,
   });
+  activeServer = server;
 
   try {
     // Start a read-only debate thread
@@ -533,6 +671,7 @@ async function handleDebateStart(argv) {
       "Read any relevant files in the codebase to ground your feedback.",
       "</role>",
       "",
+      priorDecisionsBlock,
       "<plan>",
       plan,
       "</plan>",
@@ -547,7 +686,9 @@ async function handleDebateStart(argv) {
       "Read relevant source files before responding — don't guess about the codebase.",
       "Be concrete. Cite file paths and line numbers when pushing back.",
       "</instructions>",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     const result = await server.sendTurn(threadId, debatePrompt, {
       timeoutMs: config.turnTimeoutMs,
@@ -570,7 +711,11 @@ async function handleDebateStart(argv) {
     streamer.finish();
     throw error;
   } finally {
-    await server.close();
+    try {
+      await server.close();
+    } finally {
+      if (activeServer === server) activeServer = null;
+    }
   }
 }
 
@@ -598,6 +743,7 @@ async function handleDebateTurn(argv) {
     },
     onAgentDelta: streamer.onAgentDelta,
   });
+  activeServer = server;
 
   try {
     // Resume the debate thread
@@ -632,7 +778,11 @@ async function handleDebateTurn(argv) {
     streamer.finish();
     throw error;
   } finally {
-    await server.close();
+    try {
+      await server.close();
+    } finally {
+      if (activeServer === server) activeServer = null;
+    }
   }
 }
 
@@ -660,6 +810,7 @@ async function handleExecute(argv) {
     },
     onAgentDelta: streamer.onAgentDelta,
   });
+  activeServer = server;
 
   try {
     // Start a write-capable execute thread
@@ -695,7 +846,36 @@ async function handleExecute(argv) {
     const result = await server.sendTurn(threadId, executePrompt, {
       timeoutMs: config.turnTimeoutMs,
       idleTimeoutMs: config.idleTimeoutMs,
+      onTurnStarted: ({ threadId: startedThreadId, turnId }) => {
+        session.pendingTurn = {
+          threadId: startedThreadId,
+          turnId,
+          startedAt: nowIso(),
+        };
+        saveSession(session, CWD);
+      },
     });
+    session.pendingTurn = null;
+    saveSession(session, CWD);
+
+    if (config.codexSelfReview) {
+      output("[COLLAB] Running Codex self-review of uncommitted changes...\n");
+      try {
+        const reviewResult = await server.startReview(threadId, {
+          target: { type: "uncommittedChanges" },
+        });
+        if (reviewResult.error) {
+          throw new Error(String(reviewResult.error));
+        }
+        if (reviewResult.reviewText) {
+          addMessage(session, "codex", "[SELF-REVIEW] " + reviewResult.reviewText, CWD);
+          result.selfReviewText = reviewResult.reviewText;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output(`[COLLAB] Self-review unavailable: ${message}\n`);
+      }
+    }
 
     trackFilesFromNotifications(session, result.fileChanges ?? []);
     const baseline = session.gitBaseline ?? {};
@@ -720,7 +900,11 @@ async function handleExecute(argv) {
     streamer.finish();
     throw error;
   } finally {
-    await server.close();
+    try {
+      await server.close();
+    } finally {
+      if (activeServer === server) activeServer = null;
+    }
   }
 }
 
@@ -748,6 +932,7 @@ async function handleExecuteContinue(argv) {
     },
     onAgentDelta: streamer.onAgentDelta,
   });
+  activeServer = server;
 
   try {
     await server.resumeThread(session.executeThreadId, {
@@ -765,7 +950,17 @@ async function handleExecuteContinue(argv) {
     const result = await server.sendTurn(session.executeThreadId, fixPrompt, {
       timeoutMs: config.turnTimeoutMs,
       idleTimeoutMs: config.idleTimeoutMs,
+      onTurnStarted: ({ threadId, turnId }) => {
+        session.pendingTurn = {
+          threadId,
+          turnId,
+          startedAt: nowIso(),
+        };
+        saveSession(session, CWD);
+      },
     });
+    session.pendingTurn = null;
+    saveSession(session, CWD);
 
     trackFilesFromNotifications(session, result.fileChanges ?? []);
     const baseline = session.gitBaseline ?? {};
@@ -789,7 +984,11 @@ async function handleExecuteContinue(argv) {
     streamer.finish();
     throw error;
   } finally {
-    await server.close();
+    try {
+      await server.close();
+    } finally {
+      if (activeServer === server) activeServer = null;
+    }
   }
 }
 
@@ -819,6 +1018,9 @@ async function main() {
     case "session-activate":
       handleSessionActivate(argv);
       break;
+    case "session-prune":
+      handleSessionPrune(argv);
+      break;
     case "session-note":
       handleSessionNote(argv);
       break;
@@ -843,17 +1045,38 @@ async function main() {
     case "execute-continue":
       await handleExecuteContinue(argv);
       break;
+    case "turn-interrupt":
+      handleTurnInterrupt();
+      break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);
   }
 }
 
-// Kill any lingering child processes on shutdown
-function onShutdown() {
-  process.exit(0);
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  try {
+    if (activeServer) {
+      await activeServer.close({ force: true });
+      activeServer = null;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[COLLAB] Shutdown cleanup error: ${message}\n`);
+  } finally {
+    process.exitCode = signal === "SIGINT" ? 130 : 143;
+    process.exit();
+  }
 }
-process.on("SIGINT", onShutdown);
-process.on("SIGTERM", onShutdown);
+
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);

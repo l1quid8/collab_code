@@ -121,7 +121,15 @@ Sessions are saved to `.collab/sessions/`. You can:
 - **Halt** a session mid-debate
 - **Reject** after review to discard all changes
 - **Inspect** diffs before committing
-Halt saves the session state to `.collab/sessions/`. Manual resume is not yet implemented — to continue a halted task, start a new session.
+Halt saves the session state to `.collab/sessions/`. Halted sessions can be resumed with `session-activate <id>`.
+
+## Knowledge base
+
+Cross-session decisions are stored in `.collab/knowledge.json`.
+
+- Add decisions with `session-note --type decision --text "..."`
+- When a session is completed, those decisions are persisted into the knowledge base
+- Future `debate-start` prompts inject the top recent decisions as advisory `<past_decisions>` context
 
 ## License
 
