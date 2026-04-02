@@ -115,6 +115,31 @@ View all config:
 /collab:config --show
 ```
 
+### Sandbox mode
+
+Codex runs inside a sandbox that controls what it can do on your system. The default is `workspace-write`, which lets Codex read anything but only write within your project directory.
+
+Available modes:
+
+| Mode | Debate | Execute | Description |
+|------|--------|---------|-------------|
+| `read-only` | default | - | No writes. Used for debate phase. |
+| `workspace-write` | - | default | Read anything, write within project only. |
+| `danger-full-access` | - | - | No restrictions. Full system access. |
+
+**If Codex hits a sandbox blocking error during execution** (e.g. trying to install global packages, write outside the project, or access restricted paths), switch to `danger-full-access`:
+
+```
+/collab:config --set codexSandbox=danger-full-access
+```
+
+This gives Codex unrestricted access — only use this when you trust the task and environment.
+
+You can also change the debate sandbox if needed:
+```
+/collab:config --set codexDebateSandbox=workspace-write
+```
+
 ## Session management
 
 Sessions are saved to `.collab/sessions/`. You can:

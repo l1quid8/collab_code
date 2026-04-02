@@ -415,7 +415,6 @@ function handleSessionNote(argv) {
     });
   } else {
     session.notes.push(text);
-    output(`[COLLAB] Note: ${text}\n`);
   }
 
   saveSession(session, CWD);

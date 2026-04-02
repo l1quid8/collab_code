@@ -57,6 +57,11 @@ export function loadConfig(cwd) {
  * @param {string} [cwd]
  */
 export function setConfigValue(key, value, cwd) {
+  if (!Object.hasOwn(DEFAULTS, key) && key !== "architect") {
+    throw new Error(
+      `Unknown config key "${key}". Valid keys: ${Object.keys(DEFAULTS).join(", ")}`
+    );
+  }
   const dir = ensureConfigDir(cwd);
   const configPath = path.join(dir, CONFIG_FILE);
   const config = loadConfig(cwd);

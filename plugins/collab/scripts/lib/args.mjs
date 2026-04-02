@@ -3,38 +3,6 @@
  */
 
 /**
- * Split a raw argument string into tokens, respecting quoted strings.
- * @param {string} raw
- * @returns {string[]}
- */
-export function splitRawArgs(raw) {
-  const tokens = [];
-  let current = "";
-  let inQuote = null;
-
-  for (const ch of raw) {
-    if (inQuote) {
-      if (ch === inQuote) {
-        inQuote = null;
-      } else {
-        current += ch;
-      }
-    } else if (ch === '"' || ch === "'") {
-      inQuote = ch;
-    } else if (ch === " " || ch === "\t") {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-    } else {
-      current += ch;
-    }
-  }
-  if (current) tokens.push(current);
-  return tokens;
-}
-
-/**
  * Parse argv into { options, positionals }.
  * @param {string[]} argv
  * @param {{ valueOptions?: string[], booleanOptions?: string[] }} config

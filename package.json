@@ -1,8 +1,17 @@
 {
   "name": "collab-code",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "type": "module",
   "description": "Claude ↔ Codex collaboration plugin",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/l1quid8/collab_code.git"
+  },
+  "homepage": "https://github.com/l1quid8/collab_code",
+  "bugs": "https://github.com/l1quid8/collab_code/issues",
+  "engines": {
+    "node": ">=18.18.0"
+  }
 }
