@@ -10,7 +10,6 @@ const DEFAULTS = {
   idleTimeoutMs: 60000, // 60 seconds between idle heartbeats (does not terminate turn)
   codexSandbox: "workspace-write",
   codexDebateSandbox: "read-only",
-  codexSelfReview: true,
 };
 
 /**

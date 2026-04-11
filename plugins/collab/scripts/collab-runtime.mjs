@@ -696,12 +696,12 @@ async function handleDebateStart(argv) {
     });
 
     // Log Codex's response
-    addMessage(session, "codex", result.lastMessage || result.reviewText || "", CWD);
+    addMessage(session, "codex", result.lastMessage || "", CWD);
 
     // Surface server stderr when Codex returned nothing — aids debugging
     const streamed = streamer.wasStreamed();
     streamer.finish();
-    if (!result.lastMessage && !result.reviewText && server.stderr) {
+    if (!result.lastMessage && server.stderr) {
       output(`[CODEX SERVER DEBUG]\n${server.stderr.slice(-2000)}\n`);
     }
 
@@ -857,25 +857,6 @@ async function handleExecute(argv) {
     });
     session.pendingTurn = null;
     saveSession(session, CWD);
-
-    if (config.codexSelfReview) {
-      output("[COLLAB] Running Codex self-review of uncommitted changes...\n");
-      try {
-        const reviewResult = await server.startReview(threadId, {
-          target: { type: "uncommittedChanges" },
-        });
-        if (reviewResult.error) {
-          throw new Error(String(reviewResult.error));
-        }
-        if (reviewResult.reviewText) {
-          addMessage(session, "codex", "[SELF-REVIEW] " + reviewResult.reviewText, CWD);
-          result.selfReviewText = reviewResult.reviewText;
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        output(`[COLLAB] Self-review unavailable: ${message}\n`);
-      }
-    }
 
     trackFilesFromNotifications(session, result.fileChanges ?? []);
     const baseline = session.gitBaseline ?? {};

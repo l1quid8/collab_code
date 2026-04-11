@@ -73,7 +73,6 @@ function normalizeSandbox(value) {
  *   threadId: string,
  *   turnId: string | null,
  *   lastMessage: string,
- *   reviewText: string,
  *   fileChanges: Array<object>,
  *   commandExecutions: Array<object>,
  *   error: unknown,
@@ -202,7 +201,6 @@ export class CodexAppServer {
       threadId,
       turnId: null,
       lastMessage: "",
-      reviewText: "",
       fileChanges: [],
       commandExecutions: [],
       error: null,
@@ -247,51 +245,6 @@ export class CodexAppServer {
       }
 
       state.turnId = state.turnId ?? response?.turnId ?? null;
-    } catch (error) {
-      state.error = error;
-    } finally {
-      this.onNotification = prevHandler;
-    }
-
-    return state;
-  }
-
-  /**
-   * Start a review on a thread.
-   * @param {string} threadId
-   * @param {{ target?: object }} options
-   * @returns {Promise<TurnResult>}
-   */
-  async startReview(threadId, options = {}) {
-    const state = {
-      threadId,
-      turnId: null,
-      lastMessage: "",
-      reviewText: "",
-      fileChanges: [],
-      commandExecutions: [],
-      error: null,
-      completed: false,
-      messages: [],
-      _lastNotificationAt: Date.now(),
-    };
-
-    const prevHandler = this.onNotification;
-    this.onNotification = (notification) => {
-      this._processTurnNotification(notification, state);
-      if (prevHandler) prevHandler(notification);
-    };
-
-    try {
-      await this.request("review/start", {
-        threadId,
-        delivery: "inline",
-        target: options.target ?? { type: "uncommittedChanges" },
-      });
-
-      if (!state.completed) {
-        await this._waitForTurnCompletion(state, 600000, 30000); // 10 min hard, 30s idle
-      }
     } catch (error) {
       state.error = error;
     } finally {
@@ -438,12 +391,6 @@ export class CodexAppServer {
         }
         break;
       }
-
-      case "item/reviewResult":
-        state.reviewText = params.text ?? params.review ?? "";
-        state.completed = true;
-        this._emitProgress("Codex review complete.", "done");
-        break;
 
       case "item/started": {
         const item = params.item ?? params;
