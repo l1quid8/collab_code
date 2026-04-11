@@ -50,6 +50,23 @@ const CAPABILITIES = {
 };
 
 /**
+ * Normalize a sandbox string to the camelCase form the Codex app-server
+ * expects on the JSON-RPC wire (e.g. "readOnly", "workspaceWrite",
+ * "dangerFullAccess"). Accepts kebab-case inputs — which match Codex's CLI
+ * flags, its TOML config, and this plugin's user-facing README — and
+ * translates them. camelCase inputs pass through unchanged. An unrecognized
+ * string is left as-is so the server returns a clear error instead of
+ * silently falling back to the most restrictive policy.
+ *
+ * @param {string | null | undefined} value
+ * @returns {string}
+ */
+function normalizeSandbox(value) {
+  if (!value) return "readOnly";
+  return String(value).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+/**
  * @typedef {{
  *   threadId: string,
  *   turnId: string | null,
@@ -145,7 +162,7 @@ export class CodexAppServer {
       cwd: this.cwd,
       model: options.model ?? null,
       approvalPolicy: "never",
-      sandbox: options.sandbox ?? "read-only",
+      sandbox: normalizeSandbox(options.sandbox),
       serviceName: "claude_code_collab_plugin",
       ephemeral: options.ephemeral ?? true,
       experimentalRawEvents: false,
@@ -164,7 +181,7 @@ export class CodexAppServer {
       cwd: this.cwd,
       model: options.model ?? null,
       approvalPolicy: "never",
-      sandbox: options.sandbox ?? "read-only",
+      sandbox: normalizeSandbox(options.sandbox),
     });
     return response;
   }

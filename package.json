@@ -1,6 +1,6 @@
 {
   "name": "collab-code",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "type": "module",
   "description": "Claude ↔ Codex collaboration plugin",
