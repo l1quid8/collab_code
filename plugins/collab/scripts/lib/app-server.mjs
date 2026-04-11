@@ -50,20 +50,22 @@ const CAPABILITIES = {
 };
 
 /**
- * Normalize a sandbox string to the camelCase form the Codex app-server
- * expects on the JSON-RPC wire (e.g. "readOnly", "workspaceWrite",
- * "dangerFullAccess"). Accepts kebab-case inputs — which match Codex's CLI
- * flags, its TOML config, and this plugin's user-facing README — and
- * translates them. camelCase inputs pass through unchanged. An unrecognized
- * string is left as-is so the server returns a clear error instead of
- * silently falling back to the most restrictive policy.
+ * Normalize a sandbox string to the kebab-case form the Codex app-server
+ * expects on the JSON-RPC wire as of codex-cli 0.118.0+ (e.g. "read-only",
+ * "workspace-write", "danger-full-access"). Accepts camelCase inputs — the
+ * legacy form this plugin used to emit in v0.1.12 and earlier — and
+ * translates them. kebab-case inputs pass through unchanged. An
+ * unrecognized string is left as-is so the server returns a clear error
+ * instead of silently falling back to the most restrictive policy.
  *
  * @param {string | null | undefined} value
  * @returns {string}
  */
 function normalizeSandbox(value) {
-  if (!value) return "readOnly";
-  return String(value).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  if (!value) return "read-only";
+  return String(value)
+    .replace(/([a-z])([A-Z])/g, (_, a, b) => `${a}-${b}`)
+    .toLowerCase();
 }
 
 /**
