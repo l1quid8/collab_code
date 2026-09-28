@@ -23,7 +23,7 @@ const KNOWLEDGE_FILE = "knowledge.json";
  *   filesModified: string[],
  *   resumeEvents: Array<{ resumedAt: string, previousStatus: string }>,
  *   pendingTurn: { threadId: string, turnId: string, startedAt: string } | null,
- *   gitBaseline: Record<string, string> | null,
+ *   gitBaseline: { root: string, entries: Record<string, string> } | null,
  *   startedAt: string,
  *   completedAt: string | null,
  *   status: string
@@ -38,10 +38,34 @@ function resolveSessionsDir(cwd) {
   return path.join(resolveStateDir(cwd), SESSIONS_DIR);
 }
 
-function ensureDirs(cwd) {
-  const sessDir = resolveSessionsDir(cwd);
-  fs.mkdirSync(sessDir, { recursive: true });
-  return sessDir;
+/**
+ * Create the state dir with a `*` .gitignore so session logs never show up in
+ * `git status` or get swept into a commit.
+ */
+export function ensureStateDir(cwd) {
+  const dir = resolveStateDir(cwd);
+  fs.mkdirSync(path.join(dir, SESSIONS_DIR), { recursive: true });
+  const ignore = path.join(dir, ".gitignore");
+  if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, "*\n");
+  return dir;
+}
+
+/**
+ * Write JSON via a temp file + rename, so a process killed mid-write (e.g. a
+ * Bash tool timeout) never leaves a truncated file behind.
+ */
+function writeJsonAtomic(filePath, value, pretty = true) {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(value, null, pretty ? 2 : 0) + "\n");
+  fs.renameSync(tmpPath, filePath);
+}
+
+function readJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function nowIso() {
@@ -49,18 +73,11 @@ function nowIso() {
 }
 
 function normalizeSession(session) {
-  if (!session || typeof session !== "object") return session;
-  if (!Array.isArray(session.decisions)) session.decisions = [];
-  if (!Array.isArray(session.notes)) session.notes = [];
-  if (!Array.isArray(session.bugsCaught)) session.bugsCaught = [];
-  if (!Array.isArray(session.filesCreated)) session.filesCreated = [];
-  if (!Array.isArray(session.filesModified)) session.filesModified = [];
-  if (!Array.isArray(session.resumeEvents)) session.resumeEvents = [];
-  if (
-    session.pendingTurn == null ||
-    typeof session.pendingTurn !== "object" ||
-    Array.isArray(session.pendingTurn)
-  ) {
+  if (!session || typeof session !== "object") return null;
+  for (const key of ["messages", "decisions", "notes", "bugsCaught", "filesCreated", "filesModified", "resumeEvents"]) {
+    if (!Array.isArray(session[key])) session[key] = [];
+  }
+  if (session.pendingTurn == null || typeof session.pendingTurn !== "object" || Array.isArray(session.pendingTurn)) {
     session.pendingTurn = null;
   }
   return session;
@@ -73,16 +90,15 @@ function generateSessionId() {
 }
 
 /**
- * Create a new session.
+ * Create a new session and make it active.
  * @param {string} task
  * @param {string} [cwd]
  * @returns {Session}
  */
 export function createSession(task, cwd) {
-  const id = generateSessionId();
   /** @type {Session} */
   const session = {
-    id,
+    id: generateSessionId(),
     task,
     phase: "plan",
     threadId: null,
@@ -104,110 +120,68 @@ export function createSession(task, cwd) {
   };
 
   saveSession(session, cwd);
-  setActiveSession(id, cwd);
+  setActiveSession(session.id, cwd);
   return session;
 }
 
 /**
- * Save a session to disk.
  * @param {Session} session
  * @param {string} [cwd]
  */
 export function saveSession(session, cwd) {
-  const dir = ensureDirs(cwd);
-  const filePath = path.join(dir, `${session.id}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(session, null, 2) + "\n");
+  ensureStateDir(cwd);
+  writeJsonAtomic(path.join(resolveSessionsDir(cwd), `${session.id}.json`), session);
 }
 
 /**
- * Load a session by ID.
  * @param {string} id
  * @param {string} [cwd]
  * @returns {Session | null}
  */
 export function loadSession(id, cwd) {
-  const filePath = path.join(resolveSessionsDir(cwd), `${id}.json`);
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return normalizeSession(parsed);
-  } catch {
-    return null;
-  }
+  return normalizeSession(readJson(path.join(resolveSessionsDir(cwd), `${id}.json`)));
 }
 
 /**
- * Set the active session ID.
- * @param {string} id
+ * @param {string | null} id
  * @param {string} [cwd]
  */
 export function setActiveSession(id, cwd) {
-  const dir = resolveStateDir(cwd);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(
-    path.join(dir, ACTIVE_FILE),
-    JSON.stringify({ id, updatedAt: nowIso() }) + "\n"
-  );
+  const dir = ensureStateDir(cwd);
+  writeJsonAtomic(path.join(dir, ACTIVE_FILE), { id, updatedAt: nowIso() }, false);
 }
 
 /**
- * Get the active session ID.
  * @param {string} [cwd]
  * @returns {string | null}
  */
 export function getActiveSessionId(cwd) {
-  try {
-    const data = JSON.parse(
-      fs.readFileSync(path.join(resolveStateDir(cwd), ACTIVE_FILE), "utf8")
-    );
-    return data.id ?? null;
-  } catch {
-    return null;
-  }
+  const id = readJson(path.join(resolveStateDir(cwd), ACTIVE_FILE))?.id;
+  return typeof id === "string" && id.trim() !== "" ? id : null;
 }
 
 /**
- * Add a message to a session.
+ * Append a message to the session log (in memory; call saveSession after).
  * @param {Session} session
  * @param {string} role - "claude" | "codex" | "user" | "system"
  * @param {string} content
- * @param {string} [cwd]
  */
-export function addMessage(session, role, content, cwd) {
+export function addMessage(session, role, content) {
   session.messages.push({ role, content, timestamp: nowIso() });
-  saveSession(session, cwd);
 }
 
 /**
- * Update session phase.
- * @param {Session} session
- * @param {string} phase
- * @param {string} [cwd]
- */
-export function setPhase(session, phase, cwd) {
-  session.phase = phase;
-  saveSession(session, cwd);
-}
-
-/**
- * Mark session as complete.
+ * Mark session as finished. Completed/rejected sessions release the active
+ * pointer; halted ones keep it so they can be resumed.
  * @param {Session} session
  * @param {string} status - "completed" | "halted" | "rejected"
  * @param {string} [cwd]
  */
 export function completeSession(session, status, cwd) {
-  const completedAt = nowIso();
   session.status = status;
-  session.completedAt = completedAt;
+  session.completedAt = nowIso();
   saveSession(session, cwd);
-
-  if (status === "completed" || status === "rejected") {
-    const stateDir = resolveStateDir(cwd);
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, ACTIVE_FILE),
-      JSON.stringify({ id: null, clearedAt: completedAt }) + "\n"
-    );
-  }
+  if (status === "completed" || status === "rejected") setActiveSession(null, cwd);
 }
 
 /**
@@ -216,11 +190,7 @@ export function completeSession(session, status, cwd) {
  * @param {string} [cwd]
  */
 export function resumeSession(session, cwd) {
-  normalizeSession(session);
-  session.resumeEvents.push({
-    resumedAt: nowIso(),
-    previousStatus: session.status ?? "unknown",
-  });
+  session.resumeEvents.push({ resumedAt: nowIso(), previousStatus: session.status ?? "unknown" });
   session.status = "active";
   session.completedAt = null;
   saveSession(session, cwd);
@@ -228,15 +198,13 @@ export function resumeSession(session, cwd) {
 }
 
 /**
- * Delete a session by ID.
  * @param {string} id
  * @param {string} [cwd]
  * @returns {boolean}
  */
 export function deleteSession(id, cwd) {
-  const filePath = path.join(resolveSessionsDir(cwd), `${id}.json`);
   try {
-    fs.unlinkSync(filePath);
+    fs.unlinkSync(path.join(resolveSessionsDir(cwd), `${id}.json`));
     return true;
   } catch {
     return false;
@@ -244,21 +212,22 @@ export function deleteSession(id, cwd) {
 }
 
 /**
- * List all sessions.
+ * List all sessions, newest first. Unreadable files are skipped.
  * @param {string} [cwd]
  * @returns {Session[]}
  */
 export function listSessions(cwd) {
   const dir = resolveSessionsDir(cwd);
+  let files;
   try {
-    return fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".json"))
-      .map((f) => normalizeSession(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"))))
-      .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
+  return files
+    .map((f) => normalizeSession(readJson(path.join(dir, f))))
+    .filter(Boolean)
+    .sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
 }
 
 /**
@@ -267,72 +236,41 @@ export function listSessions(cwd) {
  * @returns {Array<{ description: string, decidedBy: string | null, sessionId: string, date: string | null }>}
  */
 export function loadKnowledge(cwd) {
-  const filePath = path.join(resolveStateDir(cwd), KNOWLEDGE_FILE);
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  const parsed = readJson(path.join(resolveStateDir(cwd), KNOWLEDGE_FILE));
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 /**
- * Save the cross-session decision knowledge base atomically.
  * @param {Array<object>} entries
  * @param {string} [cwd]
  */
 export function saveKnowledge(entries, cwd) {
-  const stateDir = resolveStateDir(cwd);
-  fs.mkdirSync(stateDir, { recursive: true });
-
-  const knowledgePath = path.join(stateDir, KNOWLEDGE_FILE);
-  const tmpPath = `${knowledgePath}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(entries, null, 2) + "\n");
-  fs.renameSync(tmpPath, knowledgePath);
+  const dir = ensureStateDir(cwd);
+  writeJsonAtomic(path.join(dir, KNOWLEDGE_FILE), entries);
 }
 
 /**
- * Add unique decisions from a completed session into the knowledge base.
+ * Add unique decisions from a completed session into the knowledge base
+ * (newest 20 kept).
  * @param {Session} session
  * @param {string} [cwd]
  */
 export function appendDecisionsToKnowledge(session, cwd) {
-  const existing = loadKnowledge(cwd);
   const deduped = new Map();
+  const add = (description, decidedBy, sessionId, date) => {
+    const text = typeof description === "string" ? description.trim() : "";
+    if (!text || !sessionId) return;
+    const key = `${sessionId}::${text}`;
+    if (!deduped.has(key)) deduped.set(key, { description: text, decidedBy: decidedBy ?? null, sessionId, date: date ?? null });
+  };
 
-  for (const entry of existing) {
-    const description = typeof entry?.description === "string" ? entry.description.trim() : "";
-    const sessionId = typeof entry?.sessionId === "string" ? entry.sessionId : "";
-    if (!description || !sessionId) continue;
-    const key = `${sessionId}::${description}`;
-    if (!deduped.has(key)) {
-      deduped.set(key, {
-        description,
-        decidedBy: entry.decidedBy ?? null,
-        sessionId,
-        date: entry.date ?? null,
-      });
-    }
+  for (const entry of loadKnowledge(cwd)) {
+    add(entry?.description, entry?.decidedBy, typeof entry?.sessionId === "string" ? entry.sessionId : "", entry?.date);
   }
-
   for (const decision of session.decisions ?? []) {
-    const description =
-      typeof decision?.description === "string" ? decision.description.trim() : "";
-    if (!description) continue;
-
-    const key = `${session.id}::${description}`;
-    if (deduped.has(key)) continue;
-    deduped.set(key, {
-      description,
-      decidedBy: decision.decidedBy ?? null,
-      sessionId: session.id,
-      date: session.completedAt ?? null,
-    });
+    add(decision?.description, decision?.decidedBy, session.id, session.completedAt);
   }
 
-  const sorted = Array.from(deduped.values()).sort((a, b) =>
-    (b.date ?? "").localeCompare(a.date ?? "")
-  );
-  const capped = sorted.slice(0, 20);
-  saveKnowledge(capped, cwd);
+  const sorted = [...deduped.values()].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  saveKnowledge(sorted.slice(0, 20), cwd);
 }

@@ -1,100 +1,38 @@
 import { spawnSync } from "node:child_process";
 
 /**
- * Check if a binary is available on PATH.
- * @param {string} name
- * @param {string[]} [testArgs]
- * @param {{ cwd?: string }} [options]
- * @returns {{ available: boolean, version?: string, detail?: string }}
+ * Compare dotted versions numerically. Returns <0, 0 or >0.
+ * @param {string} a
+ * @param {string} b
  */
-export function binaryAvailable(name, testArgs = ["--version"], options = {}) {
-  try {
-    const result = spawnSync(name, testArgs, {
-      cwd: options.cwd ?? process.cwd(),
-      encoding: "utf8",
-      timeout: 10000,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    if (result.error) {
-      return {
-        available: false,
-        detail: result.error.code === "ENOENT" ? `${name} not found` : result.error.message,
-      };
-    }
-
-    const version = (result.stdout || result.stderr || "").trim().split("\n")[0];
-    return { available: true, version };
-  } catch (error) {
-    return { available: false, detail: error.message };
+export function compareVersions(a, b) {
+  const pa = String(a).split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
   }
-}
-
-/**
- * Run a command synchronously and return result.
- * @param {string} name
- * @param {string[]} args
- * @param {{ cwd?: string, timeout?: number }} [options]
- */
-export function runCommand(name, args, options = {}) {
-  try {
-    const result = spawnSync(name, args, {
-      cwd: options.cwd ?? process.cwd(),
-      encoding: "utf8",
-      timeout: options.timeout ?? 30000,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    return {
-      status: result.status,
-      stdout: result.stdout ?? "",
-      stderr: result.stderr ?? "",
-      error: result.error ?? null,
-    };
-  } catch (error) {
-    return { status: 1, stdout: "", stderr: "", error };
-  }
+  return 0;
 }
 
 /**
  * Get Codex CLI availability and version.
  * @param {string} [cwd]
+ * @returns {{ available: boolean, version: string | null, detail: string | null }}
  */
-export function getCodexAvailability(cwd) {
-  const result = binaryAvailable("codex", ["--version"], { cwd });
-  return {
-    available: result.available,
-    version: result.version ?? null,
-    detail: result.detail ?? null,
-  };
-}
-
-/**
- * Get Codex login status.
- * @param {string} [cwd]
- */
-export function getCodexLoginStatus(cwd) {
-  const availability = getCodexAvailability(cwd);
-  if (!availability.available) {
-    return { available: false, loggedIn: false, detail: availability.detail };
-  }
-
-  const result = runCommand("codex", ["login", "status"], { cwd });
+export function getCodexVersion(cwd) {
+  const result = spawnSync("codex", ["--version"], {
+    cwd: cwd ?? process.cwd(),
+    encoding: "utf8",
+    timeout: 10000,
+  });
   if (result.error) {
-    return { available: true, loggedIn: false, detail: result.error.message };
-  }
-
-  if (result.status === 0) {
     return {
-      available: true,
-      loggedIn: true,
-      detail: result.stdout.trim() || "authenticated",
+      available: false,
+      version: null,
+      detail: result.error.code === "ENOENT" ? "codex not found on PATH" : result.error.message,
     };
   }
-
-  return {
-    available: true,
-    loggedIn: false,
-    detail: result.stderr.trim() || result.stdout.trim() || "not authenticated",
-  };
+  const line = (result.stdout || result.stderr || "").trim().split("\n").at(-1) ?? "";
+  return { available: true, version: line.match(/\d+\.\d+\.\d+/)?.[0] ?? null, detail: line || null };
 }

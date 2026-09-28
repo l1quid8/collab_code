@@ -14,7 +14,8 @@ Claude plans. Codex challenges. They debate until they agree. Then Codex builds 
 ## Requirements
 
 - **Claude Code** (you're already here)
-- **ChatGPT subscription (incl. Free) or OpenAI API key** for Codex
+- **Codex CLI 0.118.0 or later** (`npm install -g @openai/codex`) — verified against 0.158.0
+- **ChatGPT subscription (incl. Free), OpenAI API key, or a custom model provider** configured in Codex
 - **Node.js 18.18 or later**
 
 ## Install
@@ -115,6 +116,16 @@ View all config:
 /collab:config --show
 ```
 
+| Key | Default | Description |
+|-----|---------|-------------|
+| `architect` | unset | Which Claude model plans (`opus` or `sonnet`); a preference shown in setup |
+| `codexSandbox` | `workspace-write` | Sandbox for execute turns |
+| `codexDebateSandbox` | `read-only` | Sandbox for debate turns |
+| `turnTimeoutMs` | `570000` | Max time for one Codex turn. Just under Claude Code's 10-minute Bash limit, so a slow turn is interrupted and reported instead of killed |
+| `idleTimeoutMs` | `60000` | Print a heartbeat after this much silence from Codex |
+
+Invalid values (e.g. `turnTimeoutMs=5m`) are rejected when set.
+
 ### Sandbox mode
 
 Codex runs inside a sandbox that controls what it can do on your system. The default is `workspace-write`, which lets Codex read anything but only write within your project directory.
@@ -142,11 +153,14 @@ You can also change the debate sandbox if needed:
 
 ## Session management
 
-Sessions are saved to `.collab/sessions/`. You can:
-- **Halt** a session mid-debate
+Sessions are saved to `.collab/sessions/`. The `.collab/` directory contains a `*` `.gitignore`, so it never shows up in `git status` or gets committed. You can:
+- **Halt** a session mid-debate — halted sessions can be resumed with `session-activate <id>`
 - **Reject** after review to discard all changes
 - **Inspect** diffs before committing
-Halt saves the session state to `.collab/sessions/`. Halted sessions can be resumed with `session-activate <id>`.
+
+During execute, the plugin tracks which files Codex created and modified — both its patches and files written by shell commands (lockfiles, generated code), via a `git status` baseline taken before execute. Files you already had uncommitted edits in are flagged rather than silently included, so a reject never discards your own work without asking.
+
+If a Codex turn fails (rate limit, auth, timeout), the command exits non-zero and prints the real error, so Claude can surface it instead of treating it as an empty reply.
 
 ## Knowledge base
 
@@ -155,6 +169,14 @@ Cross-session decisions are stored in `.collab/knowledge.json`.
 - Add decisions with `session-note --type decision --text "..."`
 - When a session is completed, those decisions are persisted into the knowledge base
 - Future `debate-start` prompts inject the top recent decisions as advisory `<past_decisions>` context
+
+## Development
+
+```
+npm test
+```
+
+Runs the `node:test` suite against a fake `codex` binary that replays the app-server protocol, so no Codex install or OpenAI account is needed. To check compatibility with a new Codex release, compare `codex app-server generate-ts --out <dir>` against `plugins/collab/scripts/lib/app-server.mjs`.
 
 ## License
 

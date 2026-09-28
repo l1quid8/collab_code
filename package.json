@@ -1,9 +1,12 @@
 {
   "name": "collab-code",
-  "version": "0.1.14",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Claude ↔ Codex collaboration plugin",
+  "scripts": {
+    "test": "node --test plugins/collab/test/*.test.mjs"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",

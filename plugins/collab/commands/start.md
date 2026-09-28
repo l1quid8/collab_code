@@ -11,6 +11,17 @@ Raw task:
 
 Read the `architect-role` skill before proceeding.
 
+## Running the runtime
+
+- **Pass plans and messages on stdin, never inside double quotes.** Markdown is full of backticks and `$`, which the shell would execute or expand. Use `-` plus a quoted heredoc:
+  ```bash
+  node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" debate-turn - <<'COLLAB_EOF'
+  <text, verbatim>
+  COLLAB_EOF
+  ```
+- **Codex turns take minutes.** Run `debate-start`, `debate-turn`, `execute` and `execute-continue` with the Bash tool timeout set to `600000`.
+- **A non-zero exit means the Codex turn failed** (`[CODEX ERROR] ...` or `[CODEX EXECUTION FAILED]`: rate limit, auth, timeout). Show the error to the user and ask how to proceed; don't retry blindly. After a failed execute, files may already be written — they are still tracked in the session.
+
 ## Phase 0: Setup
 
 First, check if the architect model is configured:
@@ -19,8 +30,8 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" config --get architect
 ```
 
 If null or empty, ask the user which model should plan:
-- Use `AskUserQuestion` with options: `Opus 4.6 (deeper, slower)` and `Sonnet 4.6 (faster, lighter)`
-- Save their choice:
+- Use `AskUserQuestion` with options: `Opus (deeper, slower)` and `Sonnet (faster, lighter)`
+- Save their choice (`opus` or `sonnet`):
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" config --set architect=opus
 ```
@@ -33,7 +44,9 @@ If not ready, tell the user what to do and stop.
 
 Create a session:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-create "$ARGUMENTS"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-create - <<'COLLAB_EOF'
+$ARGUMENTS
+COLLAB_EOF
 ```
 
 ## Phase 1: Plan
@@ -67,7 +80,9 @@ Read notes from `annotations["Plan ready — how do you want to proceed?"].notes
 
 Send your plan to Codex for review:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" debate-start "<your full plan text>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" debate-start - <<'COLLAB_EOF'
+<your full plan text>
+COLLAB_EOF
 ```
 
 This runs Codex in **read-only mode**. Codex can read the codebase to ground its feedback but cannot modify anything. All commands Codex runs and files it reads are visible in the output.
@@ -78,7 +93,9 @@ Read Codex's response carefully. It will push back, flag issues, suggest alterna
 
 Then send your response back to Codex:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" debate-turn "<your response>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" debate-turn - <<'COLLAB_EOF'
+<your response>
+COLLAB_EOF
 ```
 
 **This is a loop.** Continue debating until you and Codex converge on a plan.
@@ -98,7 +115,9 @@ Read notes from `annotations["How do you want to proceed?"].notes`. If the key i
 
 **If "Halt":** If notes provided, save them first:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-note --type note --text "<notes>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-note --type note - <<'COLLAB_EOF'
+<notes>
+COLLAB_EOF
 ```
 Then halt:
 ```bash
@@ -113,18 +132,20 @@ Summarize the converged plan — incorporating all changes from the debate.
 
 Send it to Codex for implementation:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" execute "<converged plan>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" execute - <<'COLLAB_EOF'
+<converged plan>
+COLLAB_EOF
 ```
 
 This runs Codex in **workspace-write mode**. Codex will create/modify files and run builds.
 
-Wait for Codex to finish. Read the execution output carefully.
+Wait for Codex to finish. Read the execution output carefully. It ends with the session's full file lists (`created:` / `modified:`) — these include files Codex wrote via shell commands, not just its patches.
 
 ## Phase 4: Review
 
 This is YOUR job again. Review everything Codex built.
 
-1. Read every file Codex created or modified using `Read`.
+1. Read every file listed under "Session files to review" using `Read`.
 2. Check for:
    - Correctness — does the implementation match the converged plan?
    - Bugs — logic errors, edge cases, off-by-ones
@@ -135,7 +156,9 @@ This is YOUR job again. Review everything Codex built.
 
 If you find issues, send them to Codex for fixing:
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" execute-continue "<your review findings>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" execute-continue - <<'COLLAB_EOF'
+<your review findings>
+COLLAB_EOF
 ```
 
 Read the fixes. Review again. Repeat until clean.
@@ -145,10 +168,15 @@ When everything passes review, use `AskUserQuestion` with options:
 - `Inspect — show me the diffs first`
 - `Reject — discard all changes`
 
-**If Commit:**
-Stage only the files Codex created or modified (read them from the session's `filesCreated` and `filesModified` arrays via `session-status`). Then commit:
+Get the file lists from `session-status` (`filesCreated`, `filesModified`):
 ```bash
-git add <files Codex touched> && git commit -m "<descriptive commit message>"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-status
+```
+
+**If Commit:**
+Stage only those files (`git add` also stages deletions and the old side of renames, which appear in `filesModified`). Then commit:
+```bash
+git add -- <filesCreated> <filesModified> && git commit -m "<descriptive commit message>"
 ```
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-complete completed
@@ -157,7 +185,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-complete complet
 **If Inspect:** Show the user `git diff` and wait for their decision.
 
 **If Reject:**
-Use `git checkout -- <file>` and `git clean -f <file>` scoped to only the files Codex created or modified. Do NOT run `git checkout -- .` or `git clean -fd` as these would destroy unrelated uncommitted work.
+Restore modified files and remove created ones, scoped to exactly those lists:
+```bash
+git checkout -- <filesModified>
+git clean -f -- <filesCreated>
+```
+Run each command only when its list is non-empty — `git clean -f` with no paths deletes every untracked file. If the runtime warned that Codex edited files that already had uncommitted changes, ask the user before restoring those — `git checkout` would discard their earlier edits too. Do NOT run `git checkout -- .` or `git clean -fd` as these would destroy unrelated uncommitted work.
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/collab-runtime.mjs" session-complete rejected
 ```
