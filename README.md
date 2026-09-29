@@ -178,6 +178,12 @@ npm test
 
 Runs the `node:test` suite against a fake `codex` binary that replays the app-server protocol, so no Codex install or OpenAI account is needed. To check compatibility with a new Codex release, compare `codex app-server generate-ts --out <dir>` against `plugins/collab/scripts/lib/app-server.mjs`.
 
+### Releasing
+
+1. Bump the version in `plugins/collab/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and `package.json`.
+2. Add a `## [x.y.z]` section to `CHANGELOG.md`.
+3. On `main`, either run the **release** workflow from the Actions tab with version `x.y.z`, or push a `vx.y.z` tag. It runs the tests, checks the versions match, creates the tag if needed, and publishes the GitHub release with the changelog section as notes.
+
 ## License
 
 MIT

@@ -1,11 +1,19 @@
 name: release
 
-# Push a tag like v0.2.1 to publish a GitHub release. The tag must match the
-# version in plugin.json and marketplace.json, and CHANGELOG.md must have a
-# "## [0.2.1]" section, which becomes the release notes.
+# Publish a GitHub release either way:
+#   - push a tag like v0.2.1, or
+#   - run this workflow (Actions tab or API) with version 0.2.1; it creates
+#     the tag on the selected branch.
+# The version must match plugin.json and marketplace.json, and CHANGELOG.md
+# must have a "## [0.2.1]" section, which becomes the release notes.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 0.2.1"
+        required: true
 
 permissions:
   contents: write
@@ -13,6 +21,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,10 +31,14 @@ jobs:
 
       - name: Check tag matches plugin version
         run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid release tag: $TAG"
+            exit 1
+          fi
           plugin=$(node -p "require('./plugins/collab/.claude-plugin/plugin.json').version")
           market=$(node -p "require('./.claude-plugin/marketplace.json').plugins[0].version")
-          if [ "v$plugin" != "$GITHUB_REF_NAME" ] || [ "v$market" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match plugin.json ($plugin) / marketplace.json ($market)"
+          if [ "v$plugin" != "$TAG" ] || [ "v$market" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match plugin.json ($plugin) / marketplace.json ($market)"
             exit 1
           fi
 
@@ -32,17 +46,23 @@ jobs:
 
       - name: Extract release notes
         run: |
-          awk -v v="${GITHUB_REF_NAME#v}" '
+          awk -v v="${TAG#v}" '
             index($0, "## [" v "]") == 1 { found = 1; next }
             found && /^## / { exit }
             found { print }
           ' CHANGELOG.md > notes.md
           if [ ! -s notes.md ]; then
-            echo "::error::No CHANGELOG.md section for ${GITHUB_REF_NAME#v}"
+            echo "::error::No CHANGELOG.md section for ${TAG#v}"
             exit 1
           fi
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --target "$GITHUB_SHA"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
+          fi
